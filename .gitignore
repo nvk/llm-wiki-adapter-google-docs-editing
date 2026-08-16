@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+
+# Tool-only repository: runtime material is always external.
+credentials/
+tokens/
+content/
+documents/
+plans/
+receipts/
+results/
+outputs/
+artifacts/
+journal/
+state/
+*.jsonl
+*.sqlite*
+*.db
+*.pdf
+*.docx

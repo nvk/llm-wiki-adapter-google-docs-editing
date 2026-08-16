@@ -1,0 +1,48 @@
+{
+  "protocol": "llm-wiki-adapter/v1",
+  "id": "google-docs-editing",
+  "version": "0.1.0",
+  "description": "Private tool for revision-locked Google Docs edits applied and verified as tracked suggestions.",
+  "distribution": "private",
+  "entrypoint": [".venv/bin/python", "adapter.py"],
+  "capabilities": [
+    "google-docs-inspection",
+    "google-docs-suggestion-planning",
+    "google-docs-tracked-changes",
+    "google-docs-suggestion-verification"
+  ],
+  "network": "required",
+  "writes_wiki": false,
+  "operations": {
+    "self-test": {
+      "read_arguments": [],
+      "requires_output_dir": false
+    },
+    "inspect": {
+      "read_arguments": [],
+      "remote_resource_arguments": ["document_resource"],
+      "requires_output_dir": true,
+      "effects": ["remote-read"]
+    },
+    "plan": {
+      "read_arguments": ["edit_spec"],
+      "remote_resource_arguments": ["document_resource"],
+      "requires_output_dir": true,
+      "effects": ["remote-read"]
+    },
+    "apply": {
+      "read_arguments": ["plan"],
+      "remote_resource_arguments": ["document_resource"],
+      "requires_output_dir": true,
+      "approved_plan_argument": "plan",
+      "effects": ["remote-read", "remote-write"]
+    },
+    "verify": {
+      "read_arguments": ["receipt"],
+      "remote_resource_arguments": ["document_resource"],
+      "requires_output_dir": true,
+      "effects": ["remote-read"]
+    }
+  },
+  "output_classes": ["private"]
+}
