@@ -310,6 +310,34 @@ function findReplaceAXControls(nodes) {
   });
   const findInput = editable.find((node) => /^find\b/.test(axName(node))) || null;
   const replaceInput = editable.find((node) => /^replace\b/.test(axName(node))) || null;
+  if (findInput && replaceInput && findInput !== replaceInput) {
+    return { findInput, replaceInput };
+  }
+  const byId = new Map(nodes.filter((node) => node && node.nodeId).map((node) => [node.nodeId, node]));
+  const descendants = (root) => {
+    const found = [];
+    const pending = Array.isArray(root.childIds) ? [...root.childIds] : [];
+    const seen = new Set();
+    while (pending.length) {
+      const nodeId = pending.shift();
+      if (seen.has(nodeId)) continue;
+      seen.add(nodeId);
+      const node = byId.get(nodeId);
+      if (!node) continue;
+      found.push(node);
+      if (Array.isArray(node.childIds)) pending.push(...node.childIds);
+    }
+    return found;
+  };
+  for (const dialog of nodes.filter((node) => node && !node.ignored && axRole(node) === "dialog")) {
+    const dialogEditable = descendants(dialog).filter((node) => (
+      node && !node.ignored && node.backendDOMNodeId &&
+      ["textbox", "textfield", "searchbox", "combobox"].includes(axRole(node))
+    ));
+    if (dialogEditable.length === 2) {
+      return { findInput: dialogEditable[0], replaceInput: dialogEditable[1] };
+    }
+  }
   return { findInput, replaceInput };
 }
 
@@ -606,7 +634,8 @@ function findReplaceContextExpression(body) {
       '[role="dialog"],[aria-modal="true"],.docs-dialog,.modal-dialog,.docs-findandreplacedialog'
     ))
       .filter(visible);
-    const namedDialog = dialogs.find((candidate) => {
+    const inputs = Array.from(document.querySelectorAll('input,[role="textbox"]')).filter(visible);
+    let namedDialog = dialogs.find((candidate) => {
       const name = normalize([candidate.getAttribute("aria-label"), candidate.getAttribute("data-dialog-title")]
         .filter(Boolean).join(" "));
       const heading = Array.from(candidate.querySelectorAll('[role="heading"],h1,h2,h3,.docs-dialog-title'))
@@ -615,7 +644,19 @@ function findReplaceContextExpression(body) {
       return /find( and| &) replace/.test(name) || /find( and| &) replace/.test(heading) ||
         /find.*replace/.test(className);
     }) || null;
-    const inputs = Array.from(document.querySelectorAll('input,[role="textbox"]')).filter(visible);
+    if (!namedDialog) {
+      namedDialog = dialogs.find((candidate) => {
+        const dialogInputs = inputs.filter((element) => candidate.contains(element));
+        const buttons = Array.from(candidate.querySelectorAll('[role="button"],button')).filter(visible);
+        const hasReplaceAction = buttons.some((button) => {
+          const name = normalize([
+            button.getAttribute("aria-label"), button.getAttribute("data-tooltip"), button.textContent,
+          ].filter(Boolean).join(" "));
+          return /^replace\b/.test(name);
+        });
+        return dialogInputs.length === 2 && hasReplaceAction;
+      }) || null;
+    }
     const score = (element, kind) => {
       const name = label(element);
       const className = normalize(element.className);
