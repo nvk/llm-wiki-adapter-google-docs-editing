@@ -1,85 +1,86 @@
-const BRIDGE_PROTOCOL = "llm-wiki-google-docs-extension/v1";
-const DEFAULT_PORT = 17843;
-const POLL_ALARM = "approved-edit-poll";
+const BRIDGE_PROTOCOL = "llm-wiki-google-docs-extension/v2";
+const NATIVE_HOST = "net.llmwiki.google_docs";
 const LAST_NORMAL_WINDOW_KEY = "lastNormalWindowId";
-let automaticRun = null;
+const CONNECTOR_STATE_KEY = "nativeConnectorState";
+let nativePort = null;
+let activeJob = null;
+let reconnectTimer = null;
+let pendingBoundary = null;
+
+async function setConnectorState(state, detail = "") {
+  await chrome.storage.session.set({
+    [CONNECTOR_STATE_KEY]: { state, detail: String(detail || "").slice(0, 240) },
+  });
+  const badge = state === "working" ? "…" : state === "connected" ? "" : "!";
+  const color = state === "working" ? "#B7791F" : state === "connected" ? "#2F855A" : "#C53030";
+  await chrome.action.setBadgeText({ text: badge });
+  await chrome.action.setBadgeBackgroundColor({ color });
+}
 
 async function configureExtension() {
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  const alarm = await chrome.alarms.get(POLL_ALARM);
-  if (!alarm) {
-    await chrome.alarms.create(POLL_ALARM, { periodInMinutes: 0.5 });
-  }
   await rememberCurrentNormalWindow();
+  connectNativeBridge();
 }
 
 chrome.runtime.onInstalled.addListener(configureExtension);
 chrome.runtime.onStartup.addListener(configureExtension);
 configureExtension().catch(() => {});
 
-function assertPort(value) {
-  const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error("Bridge port must be between 1 and 65535.");
-  }
-  return port;
+function nativeSend(value) {
+  if (!nativePort) throw new Error("The local native connector is offline.");
+  nativePort.postMessage({ protocol: BRIDGE_PROTOCOL, ...value });
 }
 
-async function configuration() {
-  const stored = await chrome.storage.local.get(["bridgePort", "bridgeToken"]);
-  return {
-    port: assertPort(stored.bridgePort || DEFAULT_PORT),
-    token: typeof stored.bridgeToken === "string" ? stored.bridgeToken : "",
-  };
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectNativeBridge();
+  }, 1500);
 }
 
-async function bridgeFetch(path, { method = "GET", body = null, authenticated = true } = {}) {
-  const config = await configuration();
-  if (authenticated && !config.token) {
-    throw new Error("Pair this extension with the local adapter first.");
-  }
-  const headers = { "Content-Type": "application/json" };
-  if (authenticated) {
-    headers.Authorization = `Bearer ${config.token}`;
-  }
-  const response = await fetch(`http://127.0.0.1:${config.port}${path}`, {
-    method,
-    headers,
-    body: body === null ? null : JSON.stringify(body),
-    cache: "no-store",
-  });
-  let value;
+function connectNativeBridge() {
+  if (nativePort) return;
   try {
-    value = await response.json();
-  } catch (_error) {
-    throw new Error("The local adapter returned an invalid response.");
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+    nativePort = port;
+    setConnectorState("connecting").catch(() => {});
+    port.onMessage.addListener((message) => {
+      handleNativeMessage(message).catch((error) => {
+        const detail = error instanceof Error ? error.message : "Extension operation failed.";
+        if (activeJob) {
+          nativeSend({
+            type: "result",
+            result: {
+              job_id: activeJob.job_id,
+              status: "error",
+              mode_verified: false,
+              edit_count: 0,
+              mutation_started: false,
+              error: detail.slice(0, 500),
+            },
+          });
+          activeJob = null;
+        }
+        setConnectorState("error", detail).catch(() => {});
+      });
+    });
+    port.onDisconnect.addListener(() => {
+      nativePort = null;
+      activeJob = null;
+      if (pendingBoundary) {
+        pendingBoundary.reject(new Error("The local native connector disconnected."));
+        pendingBoundary = null;
+      }
+      setConnectorState("offline", chrome.runtime.lastError?.message || "Native host disconnected.").catch(() => {});
+      scheduleReconnect();
+    });
+  } catch (error) {
+    nativePort = null;
+    setConnectorState("offline", error instanceof Error ? error.message : "Native host unavailable.").catch(() => {});
+    scheduleReconnect();
   }
-  if (!response.ok) {
-    throw new Error(typeof value.error === "string" ? value.error : "The local adapter rejected the request.");
-  }
-  if (value.protocol !== BRIDGE_PROTOCOL) {
-    throw new Error("The local adapter bridge protocol does not match this extension.");
-  }
-  return value;
-}
-
-async function pair(message) {
-  const port = assertPort(message.port || DEFAULT_PORT);
-  const pairingCode = String(message.pairingCode || "").trim();
-  if (!/^\d{8}$/.test(pairingCode)) {
-    throw new Error("Enter the eight-digit pairing code printed by the adapter.");
-  }
-  await chrome.storage.local.set({ bridgePort: port });
-  const result = await bridgeFetch("/v1/pair", {
-    method: "POST",
-    body: { pairing_code: pairingCode },
-    authenticated: false,
-  });
-  if (result.paired !== true || typeof result.token !== "string" || result.token.length < 32) {
-    throw new Error("The local adapter did not return a valid pairing token.");
-  }
-  await chrome.storage.local.set({ bridgeToken: result.token });
-  return { paired: true, port };
 }
 
 function validateJob(job) {
@@ -109,8 +110,20 @@ function validateJob(job) {
   return job;
 }
 
-async function getJob() {
-  return validateJob(await bridgeFetch("/v1/job"));
+async function requestMutationBoundary(jobId) {
+  if (pendingBoundary) throw new Error("A mutation boundary is already pending.");
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      if (pendingBoundary) pendingBoundary = null;
+      reject(new Error("The local adapter did not authorize the mutation boundary in time."));
+    }, 30000);
+    pendingBoundary = {
+      jobId,
+      resolve: (value) => { clearTimeout(timeout); pendingBoundary = null; resolve(value); },
+      reject: (error) => { clearTimeout(timeout); pendingBoundary = null; reject(error); },
+    };
+    nativeSend({ type: "before-mutation", job_id: jobId });
+  });
 }
 
 function documentIdFromUrl(rawUrl) {
@@ -198,11 +211,35 @@ async function focusedDocumentTab(documentId) {
   ) || null;
 }
 
+async function activateDocumentTab(documentId) {
+  const tabs = await chrome.tabs.query({ url: "https://docs.google.com/document/*" });
+  let tab = tabs.find(
+    (candidate) => typeof candidate.id === "number" && documentIdFromUrl(candidate.url || "") === documentId,
+  ) || null;
+  if (!tab) {
+    const targetWindow = await mostRecentlyFocusedNormalWindow();
+    const url = `https://docs.google.com/document/d/${encodeURIComponent(documentId)}/edit`;
+    tab = await chrome.tabs.create({
+      active: true,
+      url,
+      ...(targetWindow && Number.isInteger(targetWindow.id) ? { windowId: targetWindow.id } : {}),
+    });
+  } else {
+    tab = await chrome.tabs.update(tab.id, { active: true });
+  }
+  if (!tab || !Number.isInteger(tab.id) || !Number.isInteger(tab.windowId)) {
+    throw new Error("Chrome could not open the approved Google Doc.");
+  }
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await rememberNormalWindow(tab.windowId);
+  return tab;
+}
+
 async function assertFocusedDocumentTab(tabId, documentId) {
   const tab = await focusedDocumentTab(documentId);
   if (!tab || tab.id !== tabId) {
     throw new Error(
-      "Keep the approved Google Doc active in the most recently focused normal Chrome window.",
+      "The approved Google Doc lost focus before the governed mutation boundary.",
     );
   }
 }
@@ -997,11 +1034,8 @@ async function replaceUnique(tabId, documentId, edit, jobId, firstMutation) {
   );
   if (firstMutation) {
     await assertFocusedDocumentTab(tabId, documentId);
-    const boundary = await bridgeFetch("/v1/before-mutation", {
-      method: "POST",
-      body: { job_id: jobId },
-    });
-    if (boundary.mutation_authorized !== true) {
+    const boundary = await requestMutationBoundary(jobId);
+    if (boundary !== true) {
       throw new Error("The local adapter did not authorize the mutation boundary.");
     }
   }
@@ -1091,45 +1125,51 @@ async function executeJob(job, tab) {
   }
 }
 
-async function attemptAutomaticJob() {
-  if (automaticRun) {
-    return automaticRun;
+async function handleNativeMessage(message) {
+  if (!message || message.protocol !== BRIDGE_PROTOCOL) {
+    throw new Error("The local native connector protocol does not match this extension.");
   }
-  automaticRun = (async () => {
-    let job;
-    try {
-      job = await getJob();
-    } catch (_error) {
-      return { state: "idle" };
+  if (message.type === "ready") {
+    await setConnectorState("connected");
+    return;
+  }
+  if (message.type === "mutation-authorized") {
+    if (!pendingBoundary || message.job_id !== pendingBoundary.jobId) {
+      throw new Error("The local adapter returned an unexpected mutation authorization.");
     }
-    const tab = await focusedDocumentTab(job.document_id);
-    if (!tab) {
-      return { state: "waiting-for-document" };
+    if (message.authorized === true) {
+      pendingBoundary.resolve(true);
+    } else {
+      pendingBoundary.reject(new Error("The governed mutation boundary rejected the edit."));
     }
-    const result = await executeJob(job, tab);
-    await bridgeFetch("/v1/result", { method: "POST", body: result });
-    return { state: result.status, editCount: result.edit_count };
-  })();
-  try {
-    return await automaticRun;
-  } finally {
-    automaticRun = null;
+    return;
+  }
+  if (message.type !== "job") {
+    throw new Error("The local native connector returned an unknown message.");
+  }
+  if (activeJob) {
+    throw new Error("Another Google Docs edit is already active.");
+  }
+  const job = validateJob(message.job);
+  activeJob = job;
+  await setConnectorState("working");
+  const tab = await activateDocumentTab(job.document_id);
+  const result = await executeJob(job, tab);
+  nativeSend({ type: "result", result });
+  activeJob = null;
+  if (result.status === "ok") {
+    await setConnectorState("connected");
+  } else {
+    await setConnectorState("error", result.error || "Extension operation failed.");
   }
 }
 
 async function handleMessage(message) {
-  switch (message && message.type) {
-    case "get-config": {
-      const config = await configuration();
-      return { paired: Boolean(config.token), port: config.port };
-    }
-    case "pair":
-      return pair(message);
-    case "auto-poll":
-      return attemptAutomaticJob();
-    default:
-      throw new Error("Unknown extension request.");
+  if (!message || message.type !== "get-status") {
+    throw new Error("Unknown extension request.");
   }
+  const stored = await chrome.storage.session.get(CONNECTOR_STATE_KEY);
+  return stored[CONNECTOR_STATE_KEY] || { state: nativePort ? "connected" : "offline", detail: "" };
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -1142,14 +1182,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === POLL_ALARM) {
-    attemptAutomaticJob().catch(() => {});
-  }
-});
-
 chrome.windows.onFocusChanged.addListener((windowId) => {
   rememberNormalWindow(windowId).catch(() => {});
 });
 
-setTimeout(() => attemptAutomaticJob().catch(() => {}), 1000);
+connectNativeBridge();

@@ -15,10 +15,12 @@ from google_docs_adapter.auth import (
     install_client_config,
 )
 from google_docs_adapter.auth_web import authorize_web
-from google_docs_adapter.extension_bridge import (
-    create_pairing_server,
-    extension_root,
-    wait_for_pairing,
+from google_docs_adapter.extension_bridge import extension_root
+from google_docs_adapter.native_messaging import (
+    NativeMessagingError,
+    connector_status,
+    install_native_host,
+    run_native_host,
 )
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import load_json, write_private_json
@@ -52,9 +54,18 @@ def main() -> int:
         help="Print the local setup URL without opening the default browser",
     )
     subparsers.add_parser("extension-path")
-    extension_pair_parser = subparsers.add_parser("extension-pair")
-    extension_pair_parser.add_argument("--timeout", type=int, default=600)
-    extension_pair_parser.add_argument("--port", type=int)
+    browser_install_parser = subparsers.add_parser("browser-install")
+    browser_install_parser.add_argument(
+        "--native-host-dir",
+        help="Override Chrome's user-level NativeMessagingHosts directory",
+    )
+    browser_status_parser = subparsers.add_parser("browser-status")
+    browser_status_parser.add_argument(
+        "--native-host-dir",
+        help="Override Chrome's user-level NativeMessagingHosts directory",
+    )
+    native_host_parser = subparsers.add_parser("native-host")
+    native_host_parser.add_argument("origin")
     args = parser.parse_args()
 
     if args.command == "describe":
@@ -99,16 +110,39 @@ def main() -> int:
     if args.command == "extension-path":
         print(extension_root())
         return 0
-    if args.command == "extension-pair":
+    if args.command == "browser-install":
         try:
-            server, state = create_pairing_server(port=args.port)
-            print(f"Extension bridge listening on 127.0.0.1:{server.server_port}.", flush=True)
-            print(f"Enter pairing code {state.pairing_code} in the extension side panel.", flush=True)
-            wait_for_pairing(server, state, args.timeout)
-        except (OSError, RuntimeError, ValueError) as exc:
-            print(f"Extension pairing failed: {exc}", file=sys.stderr)
+            destination = (
+                Path(args.native_host_dir).expanduser().resolve(strict=False)
+                if args.native_host_dir
+                else None
+            )
+            result = install_native_host(adapter_root(), destination)
+        except (OSError, RuntimeError, ValueError, NativeMessagingError) as exc:
+            print(f"Browser connector installation failed: {exc}", file=sys.stderr)
             return 2
-        print("Chrome extension paired. The pairing token is stored outside the repository.")
+        print("LLM Wiki browser connector installed for normal Chrome.")
+        print(f"Extension ID: {result['extension_id']}")
+        print(f"Load extension: {extension_root()}")
+        return 0
+    if args.command == "browser-status":
+        try:
+            destination = (
+                Path(args.native_host_dir).expanduser().resolve(strict=False)
+                if args.native_host_dir
+                else None
+            )
+            print(json.dumps(connector_status(destination), sort_keys=True))
+        except (OSError, RuntimeError, ValueError, NativeMessagingError) as exc:
+            print(f"Browser connector status failed: {exc}", file=sys.stderr)
+            return 2
+        return 0
+    if args.command == "native-host":
+        try:
+            run_native_host(args.origin)
+        except (OSError, RuntimeError, ValueError, NativeMessagingError) as exc:
+            print(f"Native browser connector stopped: {exc}", file=sys.stderr)
+            return 2
         return 0
 
     request = load_json(Path(args.request).resolve(strict=True), "adapter request")

@@ -185,10 +185,10 @@ class ControlPlaneIntegrationTests(unittest.TestCase):
                 self.assertTrue(plan_run["summary"]["tracked_changes"])
                 plan = outputs / "plan" / "plan.json"
                 plan_value = json.loads(plan.read_text())
-                self.assertEqual(plan_value["schema"], "google-docs-suggestion-plan/v3")
+                self.assertEqual(plan_value["schema"], "google-docs-suggestion-plan/v4")
                 self.assertEqual(
                     plan_value["write_transport"],
-                    "chrome-extension-suggesting-ui",
+                    "chrome-native-messaging-suggesting-ui",
                 )
                 self.assertEqual(plan_run["summary"]["plan_sha256"], sha256_file(plan))
                 self.assertEqual(ApiHandler.post_count, 0)

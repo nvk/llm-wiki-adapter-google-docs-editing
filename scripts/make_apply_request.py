@@ -21,10 +21,10 @@ def main() -> int:
     args = parser.parse_args()
     plan_path = Path(args.plan).expanduser().resolve(strict=True)
     plan = load_json(plan_path, "suggestion plan")
-    if plan.get("schema") != "google-docs-suggestion-plan/v3":
-        raise SystemExit("not a google-docs-suggestion-plan/v3 plan")
-    if plan.get("write_transport") != "chrome-extension-suggesting-ui":
-        raise SystemExit("plan does not authorize chrome-extension-suggesting-ui")
+    if plan.get("schema") != "google-docs-suggestion-plan/v4":
+        raise SystemExit("not a google-docs-suggestion-plan/v4 plan")
+    if plan.get("write_transport") != "chrome-native-messaging-suggesting-ui":
+        raise SystemExit("plan does not authorize chrome-native-messaging-suggesting-ui")
     value = {
         "protocol": "llm-wiki-adapter/v1",
         "adapter_id": "google-docs-editing",

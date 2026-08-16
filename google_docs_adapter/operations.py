@@ -29,7 +29,7 @@ from .storage import (
 INLINE = "SUGGESTIONS_INLINE"
 ACCEPTED = "PREVIEW_SUGGESTIONS_ACCEPTED"
 REJECTED = "PREVIEW_WITHOUT_SUGGESTIONS"
-PLAN_SCHEMA = "google-docs-suggestion-plan/v3"
+PLAN_SCHEMA = "google-docs-suggestion-plan/v4"
 EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
 
 
@@ -185,7 +185,7 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
     accepted_expected, _accepted_ranges = apply_text_edits(accepted_before, normalized_edits)
     plan = {
         "schema": PLAN_SCHEMA,
-        "write_transport": "chrome-extension-suggesting-ui",
+        "write_transport": "chrome-native-messaging-suggesting-ui",
         "document_resource": resource,
         "revision_id": str(inline["revisionId"]),
         "edit_spec_sha256": sha256_file(edit_spec_path),
@@ -312,8 +312,8 @@ def apply_suggestions(
     plan = load_json(plan_path, "suggestion plan")
     if plan.get("schema") != PLAN_SCHEMA:
         raise ValueError(f"plan schema must be {PLAN_SCHEMA}")
-    if plan.get("write_transport") != "chrome-extension-suggesting-ui":
-        raise ValueError("plan does not authorize the Chrome extension Suggesting transport")
+    if plan.get("write_transport") != "chrome-native-messaging-suggesting-ui":
+        raise ValueError("plan does not authorize the native Chrome Suggesting transport")
     if plan.get("document_resource") != resource:
         raise ValueError("plan document_resource does not match the request")
     remote_write = request.get("remote_write")
@@ -426,7 +426,7 @@ def apply_suggestions(
     if not isinstance(extension_result, dict) or extension_result.get("mode_verified") is not True:
         raise RuntimeError("extension did not confirm Suggesting mode")
     views, verification = _wait_for_extension_verification(client, document_id, plan)
-    verification["write_transport"] = "chrome-extension-suggesting-ui"
+    verification["write_transport"] = "chrome-native-messaging-suggesting-ui"
     verification["extension_mode_verified"] = True
     response = _successful_apply_response(
         resource, plan_sha256, idempotency_key, expected_revision,
@@ -540,7 +540,7 @@ def self_test() -> dict[str, Any]:
         summary={
             "utf16_indexes": True,
             "tracked_changes_required": True,
-            "write_transport": "chrome-extension-suggesting-ui",
+            "write_transport": "chrome-native-messaging-suggesting-ui",
         },
     )
 

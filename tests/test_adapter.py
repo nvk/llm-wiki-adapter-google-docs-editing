@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -24,11 +25,16 @@ from google_docs_adapter.auth_web import create_local_auth_server
 from google_docs_adapter.document import tab_text_indexes
 from google_docs_adapter.extension_bridge import (
     BRIDGE_PROTOCOL,
-    PAIRING_SCHEMA,
     ExtensionSuggestionDriver,
-    create_pairing_server,
     extension_root,
-    wait_for_pairing,
+)
+from google_docs_adapter.native_messaging import (
+    NATIVE_HOST_NAME,
+    connector_status,
+    extension_id_from_manifest,
+    install_native_host,
+    read_native_message,
+    write_native_message,
 )
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import sha256_file, write_private_json
@@ -116,7 +122,7 @@ class FakeExtension:
         before_mutation()
         self.client.applied = True
         return {
-            "transport": "chrome-extension-suggesting-ui",
+            "transport": "chrome-native-messaging-suggesting-ui",
             "mode_verified": True,
             "edit_count": len(edits),
         }
@@ -296,21 +302,22 @@ class AdapterTests(unittest.TestCase):
         manifest = json.loads((extension_root() / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["manifest_version"], 3)
         self.assertIn("debugger", manifest["permissions"])
-        self.assertIn("alarms", manifest["permissions"])
+        self.assertIn("nativeMessaging", manifest["permissions"])
         self.assertNotIn("activeTab", manifest["permissions"])
-        self.assertEqual(
-            manifest["host_permissions"],
-            ["http://127.0.0.1/*", "https://docs.google.com/*"],
-        )
-        self.assertEqual(
-            manifest["content_scripts"][0]["matches"],
-            ["https://docs.google.com/document/*"],
-        )
+        self.assertEqual(manifest["host_permissions"], ["https://docs.google.com/*"])
+        self.assertNotIn("content_scripts", manifest)
+        self.assertEqual(extension_id_from_manifest(), "mahpanmnmopoleaphpljfngdlhgjmnob")
         sidepanel = (extension_root() / "sidepanel.html").read_text(encoding="utf-8")
         worker = (extension_root() / "service-worker.js").read_text(encoding="utf-8")
-        poller = (extension_root() / "poller.js").read_text(encoding="utf-8")
         self.assertNotIn("Apply as suggestions", sidepanel)
-        self.assertIn("No extension click is required", sidepanel)
+        self.assertIn("No interaction is required", sidepanel)
+        self.assertIn("chrome.runtime.connectNative", worker)
+        self.assertIn('const NATIVE_HOST = "net.llmwiki.google_docs"', worker)
+        self.assertIn("activateDocumentTab", worker)
+        self.assertIn("chrome.tabs.create", worker)
+        self.assertIn("chrome.windows.update", worker)
+        self.assertNotIn("127.0.0.1", worker)
+        self.assertNotIn("bridgeFetch", worker)
         self.assertIn("findReplaceContextExpression", worker)
         self.assertIn("findReplaceMenuItemExpression", worker)
         self.assertIn("focusFindReplaceMenuItemExpression", worker)
@@ -331,130 +338,167 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("Google Docs did not accept the exact ${kind} field.", worker)
         self.assertIn("LAST_NORMAL_WINDOW_KEY", worker)
         self.assertIn("chrome.storage.session", worker)
-        self.assertIn("stopPolling", poller)
-        self.assertIn("!chrome.runtime.id", poller)
         self.assertIn("focusedDocumentTab", worker)
         self.assertIn('windowTypes: ["normal"]', worker)
         self.assertNotIn("matches[0]", worker)
         self.assertNotIn('visibleElementExpression(".docs-findandreplacedialog")', worker)
         self.assertNotIn("<all_urls>", json.dumps(manifest))
 
-    def test_extension_pairing_requires_chrome_origin_and_writes_private_state(self) -> None:
+    def test_native_host_installer_uses_stable_extension_origin(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            state_path = Path(temporary) / "pairing.json"
-            server, state = create_pairing_server(
-                state_path,
-                port=0,
-                pairing_code="12345678",
+            root = Path(temporary)
+            install_dir = root / "NativeMessagingHosts"
+            with mock.patch.dict(os.environ, {
+                "LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state"),
+            }):
+                result = install_native_host(Path(__file__).resolve().parents[1], install_dir)
+                status = connector_status(install_dir)
+            self.assertEqual(result["extension_id"], extension_id_from_manifest())
+            manifest = json.loads(
+                (install_dir / f"{NATIVE_HOST_NAME}.json").read_text(encoding="utf-8")
             )
-            thread = threading.Thread(
-                target=wait_for_pairing,
-                args=(server, state, 5),
-                daemon=True,
-            )
-            thread.start()
-            payload = json.dumps({"pairing_code": "12345678"}).encode("utf-8")
-            bad = urllib.request.Request(
-                f"http://127.0.0.1:{server.server_port}/v1/pair",
-                data=payload,
-                headers={"Content-Type": "application/json", "Origin": "https://example.test"},
-                method="POST",
-            )
-            with self.assertRaises(urllib.error.HTTPError) as rejected:
-                urllib.request.urlopen(bad, timeout=5)
-            self.assertEqual(rejected.exception.code, 403)
-            origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
-            request = urllib.request.Request(
-                f"http://127.0.0.1:{server.server_port}/v1/pair",
-                data=payload,
-                headers={"Content-Type": "application/json", "Origin": origin},
-                method="POST",
-            )
-            with urllib.request.urlopen(request, timeout=5) as response:
-                paired = json.loads(response.read())
-            thread.join(timeout=5)
-            self.assertFalse(thread.is_alive())
-            self.assertEqual(paired["protocol"], BRIDGE_PROTOCOL)
-            self.assertTrue(paired["paired"])
-            pairing = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(pairing["schema"], PAIRING_SCHEMA)
-            self.assertEqual(pairing["extension_origin"], origin)
-            self.assertEqual(pairing["token"], paired["token"])
+            self.assertEqual(manifest["allowed_origins"], [
+                f"chrome-extension://{extension_id_from_manifest()}/"
+            ])
+            self.assertEqual(manifest["type"], "stdio")
+            self.assertNotIn("token", json.dumps(manifest).lower())
+            self.assertTrue(status["installed"])
+            self.assertFalse(status["connected"])
             if os.name == "posix":
-                self.assertEqual(state_path.stat().st_mode & 0o077, 0)
+                self.assertEqual(result["manifest_path"].stat().st_mode & 0o077, 0)
+                self.assertEqual(result["wrapper_path"].stat().st_mode & 0o077, 0)
 
-    def test_extension_bridge_authorizes_boundary_and_returns_content_free_result(self) -> None:
+    def test_native_extension_bridge_authorizes_boundary_and_returns_content_free_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            state_path = Path(temporary) / "pairing.json"
-            origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
-            token = "synthetic-extension-token-that-is-long-enough"
-            write_private_json(state_path, {
-                "schema": PAIRING_SCHEMA,
-                "extension_origin": origin,
-                "token": token,
-            })
+            socket_path = Path(temporary) / "bridge.sock"
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(str(socket_path))
+            server.listen(1)
             before_mutation = mock.Mock()
             extension_error: list[Exception] = []
 
-            def ready(base_url: str) -> None:
-                def emulate_extension() -> None:
-                    try:
-                        headers = {"Origin": origin, "Authorization": f"Bearer {token}"}
-                        # Chrome extension GET fetches omit the Origin header.
-                        job_request = urllib.request.Request(
-                            base_url + "/v1/job",
-                            headers={"Authorization": f"Bearer {token}"},
-                        )
-                        with urllib.request.urlopen(job_request, timeout=5) as response:
-                            job = json.loads(response.read())
-                        self.assertEqual(job["protocol"], BRIDGE_PROTOCOL)
-                        boundary_request = urllib.request.Request(
-                            base_url + "/v1/before-mutation",
-                            data=json.dumps({"job_id": job["job_id"]}).encode("utf-8"),
-                            headers={**headers, "Content-Type": "application/json"},
-                            method="POST",
-                        )
-                        with urllib.request.urlopen(boundary_request, timeout=5) as response:
-                            self.assertTrue(json.loads(response.read())["mutation_authorized"])
-                        result_request = urllib.request.Request(
-                            base_url + "/v1/result",
-                            data=json.dumps({
-                                "job_id": job["job_id"],
-                                "status": "ok",
-                                "mode_verified": True,
-                                "edit_count": len(job["edits"]),
-                                "mutation_started": True,
-                            }).encode("utf-8"),
-                            headers={**headers, "Content-Type": "application/json"},
-                            method="POST",
-                        )
-                        with urllib.request.urlopen(result_request, timeout=5):
-                            pass
-                    except Exception as exc:  # pragma: no cover - surfaced below
-                        extension_error.append(exc)
+            def emulate_host() -> None:
+                try:
+                    connection, _ = server.accept()
+                    stream = connection.makefile("rwb")
+                    job_message = json.loads(stream.readline())
+                    job = job_message["job"]
+                    stream.write(json.dumps({
+                        "protocol": BRIDGE_PROTOCOL,
+                        "type": "before-mutation",
+                        "job_id": job["job_id"],
+                    }).encode("utf-8") + b"\n")
+                    stream.flush()
+                    boundary = json.loads(stream.readline())
+                    self.assertTrue(boundary["authorized"])
+                    stream.write(json.dumps({
+                        "protocol": BRIDGE_PROTOCOL,
+                        "type": "result",
+                        "result": {
+                            "job_id": job["job_id"],
+                            "status": "ok",
+                            "mode_verified": True,
+                            "edit_count": len(job["edits"]),
+                            "mutation_started": True,
+                        },
+                    }).encode("utf-8") + b"\n")
+                    stream.flush()
+                    stream.close()
+                    connection.close()
+                except Exception as exc:  # pragma: no cover - surfaced below
+                    extension_error.append(exc)
 
-                threading.Thread(target=emulate_extension, daemon=True).start()
+            thread = threading.Thread(target=emulate_host, daemon=True)
+            thread.start()
 
             driver = ExtensionSuggestionDriver(
                 "a" * 64,
                 timeout_seconds=10,
-                port=0,
-                state_path=state_path,
-                ready=ready,
+                socket_path=socket_path,
             )
             result = driver.apply(
                 "SyntheticDocument123",
                 [{"tab_id": "tab-1", "find": "old", "replace": "new"}],
                 before_mutation,
             )
+            thread.join(timeout=5)
+            server.close()
             self.assertEqual(extension_error, [])
             before_mutation.assert_called_once_with()
             self.assertEqual(result, {
-                "transport": "chrome-extension-suggesting-ui",
+                "transport": "chrome-native-messaging-suggesting-ui",
                 "mode_verified": True,
                 "edit_count": 1,
             })
             self.assertNotIn("old", json.dumps(result))
+
+    @unittest.skipIf(not hasattr(socket, "AF_UNIX"), "native relay requires Unix sockets")
+    def test_native_host_relays_extension_and_agent_messages(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        origin = f"chrome-extension://{extension_id_from_manifest()}/"
+        with tempfile.TemporaryDirectory() as temporary:
+            socket_path = Path(temporary) / "n.sock"
+            environment = dict(os.environ)
+            environment["LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET"] = str(socket_path)
+            process = subprocess.Popen(
+                [sys.executable, str(repository / "adapter.py"), "native-host", origin],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+            )
+            try:
+                assert process.stdout is not None
+                assert process.stdin is not None
+                ready = read_native_message(process.stdout)
+                self.assertEqual(ready, {"protocol": BRIDGE_PROTOCOL, "type": "ready"})
+                connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                connection.connect(str(socket_path))
+                stream = connection.makefile("rwb")
+                job = {
+                    "protocol": BRIDGE_PROTOCOL,
+                    "type": "job",
+                    "job": {"job_id": "synthetic-job"},
+                }
+                stream.write(json.dumps(job).encode("utf-8") + b"\n")
+                stream.flush()
+                self.assertEqual(read_native_message(process.stdout), job)
+                boundary = {
+                    "protocol": BRIDGE_PROTOCOL,
+                    "type": "before-mutation",
+                    "job_id": "synthetic-job",
+                }
+                write_native_message(process.stdin, boundary)
+                self.assertEqual(json.loads(stream.readline()), boundary)
+                authorization = {
+                    "protocol": BRIDGE_PROTOCOL,
+                    "type": "mutation-authorized",
+                    "job_id": "synthetic-job",
+                    "authorized": True,
+                }
+                stream.write(json.dumps(authorization).encode("utf-8") + b"\n")
+                stream.flush()
+                self.assertEqual(read_native_message(process.stdout), authorization)
+                result = {
+                    "protocol": BRIDGE_PROTOCOL,
+                    "type": "result",
+                    "result": {"job_id": "synthetic-job", "status": "ok"},
+                }
+                write_native_message(process.stdin, result)
+                self.assertEqual(json.loads(stream.readline()), result)
+                stream.close()
+                connection.close()
+            finally:
+                if process.stdin:
+                    process.stdin.close()
+                process.wait(timeout=5)
+                if process.returncode not in {0, None}:
+                    stderr = process.stderr.read().decode("utf-8") if process.stderr else ""
+                    self.fail(f"native host exited {process.returncode}: {stderr}")
+                if process.stdout:
+                    process.stdout.close()
+                if process.stderr:
+                    process.stderr.close()
 
     def test_apply_request_helper_runs_from_outside_repository(self) -> None:
         repository = Path(__file__).resolve().parents[1]
@@ -464,8 +508,8 @@ class AdapterTests(unittest.TestCase):
             plan = root / "plan.json"
             request = root / "input" / "apply.json"
             write_private_json(plan, {
-                "schema": "google-docs-suggestion-plan/v3",
-                "write_transport": "chrome-extension-suggesting-ui",
+                "schema": "google-docs-suggestion-plan/v4",
+                "write_transport": "chrome-native-messaging-suggesting-ui",
                 "document_resource": RESOURCE,
                 "revision_id": "synthetic-revision",
             })
@@ -536,7 +580,7 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(receipt["verification"]["suggestion_count"], 2)
             self.assertEqual(
                 receipt["verification"]["write_transport"],
-                "chrome-extension-suggesting-ui",
+                "chrome-native-messaging-suggesting-ui",
             )
             self.assertTrue(receipt["verification"]["extension_mode_verified"])
             receipt_path = output / "receipt.json"

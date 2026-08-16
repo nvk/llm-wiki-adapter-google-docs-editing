@@ -1,60 +1,34 @@
-const pairSection = document.getElementById("pair-section");
-const jobSection = document.getElementById("job-section");
-const status = document.getElementById("status");
-const port = document.getElementById("port");
-const pairingCode = document.getElementById("pairing-code");
-const pairButton = document.getElementById("pair");
+const title = document.getElementById("status-title");
+const detail = document.getElementById("status-detail");
+const dot = document.getElementById("status-dot");
 
-async function request(message) {
-  const response = await chrome.runtime.sendMessage(message);
-  if (!response || response.ok !== true) {
-    throw new Error(response && response.error ? response.error : "Extension service worker did not respond.");
-  }
-  return response.value;
+function render(value) {
+  const state = value && value.state ? value.state : "offline";
+  const labels = {
+    connected: "Connected to local adapter",
+    connecting: "Connecting to local adapter…",
+    working: "Applying approved suggestions…",
+    error: "Connector needs attention",
+    offline: "Local connector is offline",
+  };
+  title.textContent = labels[state] || labels.offline;
+  detail.textContent = value && value.detail ? value.detail : (
+    state === "offline"
+      ? "Run adapter.py browser-install once, then reload this extension."
+      : "No extension click is required for document edits."
+  );
+  dot.className = `dot ${state}`;
 }
 
-function showStatus(message, kind = "") {
-  status.textContent = message;
-  status.className = kind;
-}
-
-function setBusy(button, busy) {
-  button.disabled = busy;
-  button.setAttribute("aria-busy", String(busy));
-}
-
-async function initialize() {
+async function refresh() {
   try {
-    const config = await request({ type: "get-config" });
-    port.value = String(config.port);
-    pairSection.hidden = config.paired;
-    jobSection.hidden = !config.paired;
-    if (config.paired) {
-      showStatus("Waiting automatically for an approved llm-wiki edit.", "success");
-    }
+    const response = await chrome.runtime.sendMessage({ type: "get-status" });
+    if (!response || response.ok !== true) throw new Error(response?.error || "Status unavailable.");
+    render(response.value);
   } catch (error) {
-    showStatus(error.message, "error");
+    render({ state: "offline", detail: error instanceof Error ? error.message : "Status unavailable." });
   }
 }
 
-pairButton.addEventListener("click", async () => {
-  setBusy(pairButton, true);
-  showStatus("Pairing…");
-  try {
-    await request({
-      type: "pair",
-      port: Number(port.value),
-      pairingCode: pairingCode.value,
-    });
-    pairingCode.value = "";
-    pairSection.hidden = true;
-    jobSection.hidden = false;
-    showStatus("Paired. Approved llm-wiki edits will run automatically.", "success");
-  } catch (error) {
-    showStatus(error.message, "error");
-  } finally {
-    setBusy(pairButton, false);
-  }
-});
-
-initialize();
+refresh();
+setInterval(refresh, 1500);
