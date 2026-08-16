@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LLM Wiki Google Docs Suggestions",
   "description": "Automatically apply explicitly approved llm-wiki plans as suggestions in their exact open Google Doc.",
-  "version": "0.7.9",
+  "version": "0.7.10",
   "minimum_chrome_version": "120",
   "permissions": [
     "alarms",

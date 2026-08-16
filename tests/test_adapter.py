@@ -317,6 +317,8 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("activateFindReplaceMenuItem", worker)
         self.assertIn("focusReplaceFromFindInput", worker)
         self.assertIn("dialogEditable.length === 2", worker)
+        self.assertIn("waitForFindReplaceField", worker)
+        self.assertIn('new InputEvent("input"', worker)
         self.assertIn("suggestingDiagnosticsExpression", worker)
         self.assertIn(
             'const modifiers = platform.toLowerCase().includes("mac") ? 13 : 11;',

@@ -7,7 +7,7 @@ verifying the suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.7.9`
+- Version: `0.7.10`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, pairing tokens, plans, receipts, and journals remain in external
@@ -191,6 +191,10 @@ redirecting a semantic click away from the Replace field.
 When Docs omits those field names entirely, the extension accepts only exactly
 two editable descendants of the verified dialog, in dialog order; it never
 falls back to document-wide unnamed textboxes.
+Trusted keyboard input remains the first field-fill path. If Docs' custom input
+rejects it, the extension may invoke only that verified dialog field's native
+value setter and input/change events, then requires the same exact-value and
+unique-match checks before authorizing any document mutation.
 
 Changing from v0.5's browser driver to the v0.6 extension changes the plan
 schema and transport. Old `google-docs-suggestion-plan/v2` plans must be

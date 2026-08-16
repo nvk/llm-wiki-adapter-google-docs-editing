@@ -878,11 +878,36 @@ async function fillFindReplaceInput(tabId, kind, text) {
   }
   await dispatchShortcut(tabId, "a", "KeyA", modifiers);
   await command(tabId, "Input.insertText", { text });
-  await waitFor(
-    accepted,
-    `Google Docs did not accept the exact ${kind} field.`,
-    5000,
-  );
+  if (await waitForFindReplaceField(accepted, 5000)) return;
+  const setThroughDialog = await evaluate(tabId, findReplaceContextExpression(`
+    const element = ${field};
+    const prototype = element instanceof HTMLInputElement
+      ? HTMLInputElement.prototype
+      : element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : null;
+    if (!prototype) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+    if (!descriptor || typeof descriptor.set !== "function") return false;
+    descriptor.set.call(element, ${JSON.stringify(text)});
+    element.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      composed: true,
+      data: ${JSON.stringify(text)},
+      inputType: "insertText",
+    }));
+    element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    return element.value === ${JSON.stringify(text)};
+  `));
+  if (setThroughDialog && await waitForFindReplaceField(accepted, 3000)) return;
+  throw new Error(`Google Docs did not accept the exact ${kind} field.`);
+}
+
+async function waitForFindReplaceField(check, timeoutMs) {
+  try {
+    await waitFor(check, "", timeoutMs);
+    return true;
+  } catch (_error) {
+    return false;
+  }
 }
 
 async function findReplaceAXCheckbox(tabId, exactName) {
