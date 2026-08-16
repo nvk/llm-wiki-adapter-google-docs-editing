@@ -1,6 +1,7 @@
 const BRIDGE_PROTOCOL = "llm-wiki-google-docs-extension/v1";
 const DEFAULT_PORT = 17843;
 const POLL_ALARM = "approved-edit-poll";
+const LAST_NORMAL_WINDOW_KEY = "lastNormalWindowId";
 let automaticRun = null;
 
 async function configureExtension() {
@@ -9,6 +10,7 @@ async function configureExtension() {
   if (!alarm) {
     await chrome.alarms.create(POLL_ALARM, { periodInMinutes: 0.5 });
   }
+  await rememberCurrentNormalWindow();
 }
 
 chrome.runtime.onInstalled.addListener(configureExtension);
@@ -134,10 +136,56 @@ function documentTabIdFromUrl(rawUrl) {
   }
 }
 
+async function rememberNormalWindow(windowId) {
+  if (!Number.isInteger(windowId) || windowId === chrome.windows.WINDOW_ID_NONE) return;
+  try {
+    const window = await chrome.windows.get(windowId);
+    if (window.type === "normal") {
+      await chrome.storage.session.set({ [LAST_NORMAL_WINDOW_KEY]: windowId });
+    }
+  } catch (_error) {
+    // A window can close between the focus event and this lookup.
+  }
+}
+
+async function rememberCurrentNormalWindow() {
+  try {
+    const window = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+    await rememberNormalWindow(window && window.id);
+  } catch (_error) {
+    // Chrome may have no focused normal window while the worker starts.
+  }
+}
+
+async function mostRecentlyFocusedNormalWindow() {
+  try {
+    const current = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+    if (
+      current && Number.isInteger(current.id) &&
+      current.id !== chrome.windows.WINDOW_ID_NONE
+    ) {
+      await rememberNormalWindow(current.id);
+      return current;
+    }
+  } catch (_error) {
+    // Fall through to the last non-NONE focus event stored for this session.
+  }
+  const stored = await chrome.storage.session.get(LAST_NORMAL_WINDOW_KEY);
+  const windowId = stored[LAST_NORMAL_WINDOW_KEY];
+  if (!Number.isInteger(windowId)) return null;
+  try {
+    const window = await chrome.windows.get(windowId);
+    return window.type === "normal" ? window : null;
+  } catch (_error) {
+    await chrome.storage.session.remove(LAST_NORMAL_WINDOW_KEY);
+    return null;
+  }
+}
+
 async function focusedDocumentTab(documentId) {
   const [tabs, focusedWindow] = await Promise.all([
     chrome.tabs.query({ url: "https://docs.google.com/document/*" }),
-    chrome.windows.getLastFocused({ windowTypes: ["normal"] }),
+    mostRecentlyFocusedNormalWindow(),
   ]);
   if (!focusedWindow || typeof focusedWindow.id !== "number") {
     return null;
@@ -235,6 +283,99 @@ async function clickPoint(tabId, point) {
   await command(tabId, "Input.dispatchMouseEvent", {
     type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1,
   });
+}
+
+function axValue(node, property) {
+  const entry = node && node[property];
+  return entry && entry.value !== undefined ? entry.value : "";
+}
+
+function axName(node) {
+  return String(axValue(node, "name") || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function axRole(node) {
+  return String(axValue(node, "role") || "").replace(/\s+/g, "").toLowerCase();
+}
+
+async function accessibilityNodes(tabId) {
+  const response = await command(tabId, "Accessibility.getFullAXTree");
+  return Array.isArray(response.nodes) ? response.nodes : [];
+}
+
+function findReplaceAXControls(nodes) {
+  const editable = nodes.filter((node) => {
+    if (!node || node.ignored || !node.backendDOMNodeId) return false;
+    return ["textbox", "textfield", "searchbox", "combobox"].includes(axRole(node));
+  });
+  const findInput = editable.find((node) => /^find\b/.test(axName(node))) || null;
+  const replaceInput = editable.find((node) => /^replace\b/.test(axName(node))) || null;
+  return { findInput, replaceInput };
+}
+
+async function findReplaceAXState(tabId) {
+  return findReplaceAXControls(await accessibilityNodes(tabId));
+}
+
+async function axNodePoint(tabId, node) {
+  if (!node || !node.backendDOMNodeId) return null;
+  try {
+    const response = await command(tabId, "DOM.getBoxModel", {
+      backendNodeId: node.backendDOMNodeId,
+    });
+    const quad = response.model && (response.model.border || response.model.content);
+    if (!Array.isArray(quad) || quad.length < 8) return null;
+    const xs = [quad[0], quad[2], quad[4], quad[6]];
+    const ys = [quad[1], quad[3], quad[5], quad[7]];
+    return {
+      x: xs.reduce((total, value) => total + value, 0) / xs.length,
+      y: ys.reduce((total, value) => total + value, 0) / ys.length,
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function clickAXNode(tabId, node) {
+  const point = await axNodePoint(tabId, node);
+  if (!point) return false;
+  await clickPoint(tabId, point);
+  return true;
+}
+
+function namedAXNode(nodes, role, exactName) {
+  const expected = exactName.toLowerCase();
+  return nodes.find((node) => (
+    node && !node.ignored && node.backendDOMNodeId &&
+    axRole(node) === role.toLowerCase() && axName(node) === expected
+  )) || null;
+}
+
+function axChecked(node) {
+  const checked = Array.isArray(node && node.properties)
+    ? node.properties.find((property) => property.name === "checked")
+    : null;
+  if (!checked || !checked.value) return false;
+  return checked.value.value === true || checked.value.value === "true";
+}
+
+async function findReplaceAXHasUniqueMatch(tabId) {
+  const nodes = await accessibilityNodes(tabId);
+  return nodes.some((node) => /\b1\s+of\s+1\b/i.test(
+    `${axValue(node, "name")} ${axValue(node, "value")}`,
+  ));
+}
+
+async function findReplaceAXDiagnostics(tabId) {
+  const nodes = await accessibilityNodes(tabId);
+  const controls = findReplaceAXControls(nodes);
+  const roleCount = (role) => nodes.filter((node) => !node.ignored && axRole(node) === role).length;
+  return {
+    dialog: roleCount("dialog"),
+    textbox: roleCount("textbox") + roleCount("textfield") + roleCount("searchbox"),
+    find: Boolean(controls.findInput),
+    replace: Boolean(controls.replaceInput),
+  };
 }
 
 async function clickNamedControl(tabId, role, exactName, rootSelector = "body") {
@@ -436,23 +577,27 @@ function findReplaceContextExpression(body) {
       element.getAttribute("placeholder"),
       element.getAttribute("title"),
     ].filter(Boolean).join(" "));
-    const dialogs = Array.from(document.querySelectorAll('[role="dialog"],.docs-dialog,.modal-dialog'))
+    const dialogs = Array.from(document.querySelectorAll(
+      '[role="dialog"],[aria-modal="true"],.docs-dialog,.modal-dialog,.docs-findandreplacedialog'
+    ))
       .filter(visible);
     const namedDialog = dialogs.find((candidate) => {
       const name = normalize([candidate.getAttribute("aria-label"), candidate.getAttribute("data-dialog-title")]
         .filter(Boolean).join(" "));
       const heading = Array.from(candidate.querySelectorAll('[role="heading"],h1,h2,h3,.docs-dialog-title'))
         .map((candidateHeading) => normalize(candidateHeading.textContent)).join(" ");
-      return /find( and| &) replace/.test(name) || /find( and| &) replace/.test(heading);
+      const className = normalize(candidate.className);
+      return /find( and| &) replace/.test(name) || /find( and| &) replace/.test(heading) ||
+        /find.*replace/.test(className);
     }) || null;
     const inputs = Array.from(document.querySelectorAll('input,[role="textbox"]')).filter(visible);
     const score = (element, kind) => {
       const name = label(element);
       const className = normalize(element.className);
       if (kind === "find") {
-        return (/find-input/.test(className) ? 100 : 0) + (name === "find" ? 50 : 0);
+        return (/find-input/.test(className) ? 100 : 0) + (/^find\\b/.test(name) ? 50 : 0);
       }
-      return (/replace-input/.test(className) ? 100 : 0) + (/^replace( with)?$/.test(name) ? 50 : 0);
+      return (/replace-input/.test(className) ? 100 : 0) + (/^replace\\b/.test(name) ? 50 : 0);
     };
     const ranked = (kind) => inputs.map((element) => ({ element, score: score(element, kind) }))
       .filter((candidate) => candidate.score > 0)
@@ -493,7 +638,18 @@ function findReplaceMenuItemExpression() {
 }
 
 async function findReplaceOpen(tabId) {
+  const controls = await findReplaceAXState(tabId);
+  if (controls.findInput && controls.replaceInput) return true;
   return Boolean(await evaluate(tabId, findReplaceContextExpression("return true;")));
+}
+
+async function findReplaceAXMenuItem(tabId) {
+  const nodes = await accessibilityNodes(tabId);
+  return nodes.find((node) => (
+    node && !node.ignored && node.backendDOMNodeId &&
+    ["menuitem", "menuitemradio"].includes(axRole(node)) &&
+    axName(node).startsWith("find and replace")
+  )) || null;
 }
 
 async function dispatchShortcut(tabId, key, code, modifiers) {
@@ -510,15 +666,21 @@ async function openFindReplace(tabId) {
   await clickSelector(tabId, "#docs-edit-menu");
   try {
     let menuItem = null;
+    let menuAXItem = null;
     await waitFor(
       async () => {
         menuItem = await evaluate(tabId, findReplaceMenuItemExpression());
-        return Boolean(menuItem);
+        menuAXItem = menuItem ? null : await findReplaceAXMenuItem(tabId);
+        return Boolean(menuItem || menuAXItem);
       },
       "",
       2500,
     );
-    await clickPoint(tabId, menuItem);
+    if (menuItem) {
+      await clickPoint(tabId, menuItem);
+    } else if (!await clickAXNode(tabId, menuAXItem)) {
+      throw new Error("The Find and replace menu item is unavailable.");
+    }
   } catch (_error) {
     await dispatchShortcut(tabId, "Escape", "Escape", 0);
     const platform = String(await evaluate(tabId, "navigator.platform || ''"));
@@ -527,24 +689,48 @@ async function openFindReplace(tabId) {
   }
   await waitFor(
     async () => findReplaceOpen(tabId),
-    "Google Docs Find and replace did not open.",
-  );
+    "",
+  ).catch(async () => {
+    const diagnostics = await findReplaceAXDiagnostics(tabId);
+    throw new Error(
+      `Google Docs Find and replace did not open. ` +
+      `(dialog=${diagnostics.dialog}; textbox=${diagnostics.textbox}; ` +
+      `find=${diagnostics.find}; replace=${diagnostics.replace})`,
+    );
+  });
+}
+
+async function focusFindReplaceAXInput(tabId, kind) {
+  const controls = await findReplaceAXState(tabId);
+  const node = kind === "find" ? controls.findInput : controls.replaceInput;
+  return node ? clickAXNode(tabId, node) : false;
+}
+
+async function findReplaceAXInputEquals(tabId, kind, expected) {
+  const controls = await findReplaceAXState(tabId);
+  const node = kind === "find" ? controls.findInput : controls.replaceInput;
+  return Boolean(node && String(axValue(node, "value")) === expected);
 }
 
 async function fillFindReplaceInput(tabId, kind, text) {
-  const field = kind === "find" ? "findInput" : "replaceInput";
-  const focused = await evaluate(tabId, findReplaceContextExpression(`
-    const element = ${field};
-    element.focus();
-    return true;
-  `));
-  if (!focused) {
-    throw new Error("A Google Docs Find and replace input is unavailable.");
+  const axFocused = await focusFindReplaceAXInput(tabId, kind);
+  if (!axFocused) {
+    const field = kind === "find" ? "findInput" : "replaceInput";
+    const focused = await evaluate(tabId, findReplaceContextExpression(`
+      const element = ${field};
+      element.focus();
+      return true;
+    `));
+    if (!focused) {
+      throw new Error("A Google Docs Find and replace input is unavailable.");
+    }
   }
   const platform = String(await evaluate(tabId, "navigator.platform || ''"));
   const modifiers = platform.toLowerCase().includes("mac") ? 4 : 2;
   await dispatchShortcut(tabId, "a", "KeyA", modifiers);
   await command(tabId, "Input.insertText", { text });
+  if (await findReplaceAXInputEquals(tabId, kind, text)) return;
+  const field = kind === "find" ? "findInput" : "replaceInput";
   const accepted = await evaluate(tabId, findReplaceContextExpression(`
     const element = ${field};
     return (typeof element.value === "string" ? element.value : element.textContent) === ${JSON.stringify(text)};
@@ -554,7 +740,17 @@ async function fillFindReplaceInput(tabId, kind, text) {
   }
 }
 
+async function findReplaceAXCheckbox(tabId, exactName) {
+  return namedAXNode(await accessibilityNodes(tabId), "checkbox", exactName);
+}
+
+async function findReplaceAXNamedControl(tabId, role, exactName) {
+  return namedAXNode(await accessibilityNodes(tabId), role, exactName);
+}
+
 async function checkboxState(tabId, exactName) {
+  const axNode = await findReplaceAXCheckbox(tabId, exactName);
+  if (axNode) return axChecked(axNode);
   return evaluate(tabId, findReplaceContextExpression(`
     const expected = ${JSON.stringify(exactName.toLowerCase())};
     const candidates = Array.from(root.querySelectorAll('[role="checkbox"],input[type="checkbox"]'));
@@ -572,6 +768,8 @@ async function checkboxState(tabId, exactName) {
 }
 
 async function clickFindReplaceControl(tabId, role, exactName) {
+  const axNode = await findReplaceAXNamedControl(tabId, role, exactName);
+  if (axNode && await clickAXNode(tabId, axNode)) return;
   const point = await evaluate(tabId, findReplaceContextExpression(`
     const expected = ${JSON.stringify(exactName.toLowerCase())};
     const selector = ${JSON.stringify(`[role="${role}"],${role === "button" ? "button" : "input[type=checkbox]"}`)};
@@ -592,6 +790,13 @@ async function clickFindReplaceControl(tabId, role, exactName) {
     throw new Error(`Google Docs ${exactName} control is unavailable.`);
   }
   await clickPoint(tabId, point);
+}
+
+async function findReplaceHasUniqueMatch(tabId) {
+  if (await findReplaceAXHasUniqueMatch(tabId)) return true;
+  return Boolean(await evaluate(tabId, findReplaceContextExpression(
+    'return /\\b1\\s+of\\s+1\\b/i.test(root.innerText || root.textContent || "");',
+  )));
 }
 
 async function configureFindOptions(tabId) {
@@ -616,9 +821,7 @@ async function replaceUnique(tabId, documentId, edit, jobId, firstMutation) {
   await fillFindReplaceInput(tabId, "find", edit.find);
   await fillFindReplaceInput(tabId, "replace", edit.replace);
   await waitFor(
-    async () => Boolean(await evaluate(tabId, findReplaceContextExpression(
-      'return /\\b1\\s+of\\s+1\\b/i.test(root.innerText || root.textContent || "");',
-    ))),
+    async () => findReplaceHasUniqueMatch(tabId),
     "Google Docs did not confirm exactly one live match.",
     8000,
   );
@@ -668,6 +871,8 @@ async function executeJob(job, tab) {
     attached = true;
     await command(tabId, "Runtime.enable");
     await command(tabId, "Page.enable");
+    await command(tabId, "DOM.enable");
+    await command(tabId, "Accessibility.enable");
     let currentTab = documentTabIdFromUrl(tab.url || "");
     await waitForEditor(tabId);
     for (const edit of job.edits) {
@@ -701,6 +906,12 @@ async function executeJob(job, tab) {
     };
   } finally {
     if (attached) {
+      try {
+        await command(tabId, "Accessibility.disable");
+        await command(tabId, "DOM.disable");
+      } catch (_error) {
+        // The page may already be gone; detach still releases the debugger.
+      }
       try {
         await chrome.debugger.detach(debuggee(tabId));
       } catch (_error) {
@@ -765,6 +976,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === POLL_ALARM) {
     attemptAutomaticJob().catch(() => {});
   }
+});
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  rememberNormalWindow(windowId).catch(() => {});
 });
 
 setTimeout(() => attemptAutomaticJob().catch(() => {}), 1000);

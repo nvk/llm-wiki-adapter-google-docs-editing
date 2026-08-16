@@ -7,7 +7,7 @@ verifying the suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.7.3`
+- Version: `0.7.4`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, pairing tokens, plans, receipts, and journals remain in external
@@ -166,10 +166,15 @@ identifier-free.
 
 The extension first uses Google's documented platform shortcut to enter
 Suggesting mode, then falls back to the semantic mode menu (including radio
-menu items). It discovers the current Find-and-replace dialog by semantic field
-and control names rather than depending on one Google Docs CSS class. It falls
-back to Google's documented platform shortcut when the Edit-menu item is not
-available.
+menu items). Find-and-replace controls are resolved through Chrome's computed
+accessibility tree, with semantic DOM discovery as a fallback rather than a
+dependency on one Google Docs CSS class. The last selected normal Chrome window
+is retained for the service-worker session, so switching back to the terminal
+does not redirect or stall the approved job.
+
+The accessibility tree is handled only in extension memory for the active job
+and is never serialized. Failure diagnostics contain only fixed control counts
+and booleans, never accessible names or document text.
 
 Changing from v0.5's browser driver to the v0.6 extension changes the plan
 schema and transport. Old `google-docs-suggestion-plan/v2` plans must be
@@ -191,6 +196,7 @@ header/footer edits, named ranges, or tab mutations.
 
 - [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 - [Chrome Debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
+- [Chrome DevTools Protocol Accessibility domain](https://chromedevtools.github.io/devtools-protocol/tot/Accessibility/)
 - [Chrome Alarms API](https://developer.chrome.com/docs/extensions/reference/api/alarms)
 - [Extension service-worker lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle)
 - [Chrome extension cross-origin requests](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)

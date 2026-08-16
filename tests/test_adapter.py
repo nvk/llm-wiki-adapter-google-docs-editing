@@ -318,6 +318,10 @@ class AdapterTests(unittest.TestCase):
             worker,
         )
         self.assertIn('[role="menuitemradio"]', worker)
+        self.assertIn("Accessibility.getFullAXTree", worker)
+        self.assertIn("DOM.getBoxModel", worker)
+        self.assertIn("LAST_NORMAL_WINDOW_KEY", worker)
+        self.assertIn("chrome.storage.session", worker)
         self.assertIn("focusedDocumentTab", worker)
         self.assertIn('windowTypes: ["normal"]', worker)
         self.assertNotIn("matches[0]", worker)
