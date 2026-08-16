@@ -250,9 +250,11 @@ def _new_suggestion_ids(plan: dict[str, Any], views: dict[str, dict[str, Any]]) 
 
 def _journal_path(idempotency_key: str) -> Path:
     raw = os.environ.get("LLM_WIKI_GOOGLE_DOCS_STATE_DIR")
-    if not raw:
-        raise RuntimeError("LLM_WIKI_GOOGLE_DOCS_STATE_DIR is required for apply")
-    root = Path(raw).expanduser().resolve(strict=False)
+    root = (
+        Path(raw).expanduser().resolve(strict=False)
+        if raw
+        else (Path.home() / ".local" / "state" / "llm-wiki" / "google-docs-editing")
+    )
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         root.chmod(0o700)

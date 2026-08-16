@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from google_docs_adapter.auth import authorize
+from google_docs_adapter.auth import authorize, default_token_path
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import load_json, write_private_json
 
@@ -25,7 +25,7 @@ def main() -> int:
     execute_parser.add_argument("--response", required=True)
     auth_parser = subparsers.add_parser("auth")
     auth_parser.add_argument("--client-secrets", required=True)
-    auth_parser.add_argument("--token", required=True)
+    auth_parser.add_argument("--token", default=str(default_token_path()))
     auth_parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
 

@@ -51,24 +51,30 @@ The runtime has no third-party Python dependencies:
 python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python adapter.py auth \
-  --client-secrets /absolute/private/oauth-client.json \
-  --token /absolute/private/google-docs-token.json
+  --client-secrets /absolute/private/oauth-client.json
 ```
 
 The auth command uses a loopback callback with PKCE and writes the token with
 mode `0600`. It opens Google's desktop Picker, filters to native Google Docs,
 and prints the exact `google-docs:<document-id>` resource selected by the user.
-Keep both credential files outside this repository. Run `auth` again to grant
+The default token path is
+`~/.config/llm-wiki/google-docs-editing/token.json`. Override it with `--token`
+or `GOOGLE_OAUTH_TOKEN_FILE` when needed. Keep all credential files outside this
+repository. Run `auth` again to grant
 the same OAuth client access to another document; previously selected file IDs
 remain recorded in the private token metadata.
 
-Set paths in the launcher environment, not in the repository or adapter
-registry:
+The default idempotency journal is
+`~/.local/state/llm-wiki/google-docs-editing`. Optional path overrides belong in
+the launcher environment, not in the repository or adapter registry:
 
 ```bash
 export GOOGLE_OAUTH_TOKEN_FILE=/absolute/private/google-docs-token.json
 export LLM_WIKI_GOOGLE_DOCS_STATE_DIR=/absolute/private/google-docs-state
 ```
+
+When using either override, add its name with `adapter add --env <NAME>` so the
+sanitized llm-wiki launcher passes it through.
 
 ## Register one document
 
@@ -80,9 +86,7 @@ ID from its Google Docs URL:
   --read-root /absolute/private/google-docs-input \
   --read-root /absolute/private/google-docs-output \
   --write-root /absolute/private/google-docs-output \
-  --remote-resource 'google-docs:<document-id>' \
-  --env GOOGLE_OAUTH_TOKEN_FILE \
-  --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR
+  --remote-resource 'google-docs:<document-id>'
 /path/to/llm-wiki adapter doctor google-docs-editing --json
 ```
 

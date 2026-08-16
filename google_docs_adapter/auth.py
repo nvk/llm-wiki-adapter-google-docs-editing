@@ -22,6 +22,10 @@ AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 DEFAULT_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
 
+def default_token_path() -> Path:
+    return Path.home() / ".config" / "llm-wiki" / "google-docs-editing" / "token.json"
+
+
 def _post_form(url: str, fields: dict[str, str]) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
@@ -173,11 +177,15 @@ class TokenProvider:
     @classmethod
     def from_environment(cls) -> "TokenProvider":
         raw = os.environ.get("GOOGLE_OAUTH_TOKEN_FILE")
-        if not raw:
-            raise RuntimeError("GOOGLE_OAUTH_TOKEN_FILE is required")
-        path = Path(raw).expanduser().resolve(strict=False)
+        path = (
+            Path(raw).expanduser().resolve(strict=False)
+            if raw
+            else default_token_path().resolve(strict=False)
+        )
         if not path.is_file():
-            raise RuntimeError("GOOGLE_OAUTH_TOKEN_FILE does not exist")
+            raise RuntimeError(
+                "Google OAuth token does not exist; run adapter.py auth first"
+            )
         if os.name == "posix" and path.stat().st_mode & 0o077:
             raise RuntimeError("GOOGLE_OAUTH_TOKEN_FILE must not be group/world accessible")
         return cls(path)
