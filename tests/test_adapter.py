@@ -312,6 +312,10 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn("Apply as suggestions", sidepanel)
         self.assertIn("No interaction is required", sidepanel)
         self.assertIn("chrome.runtime.connectNative", worker)
+        self.assertLess(
+            worker.index("connectNativeBridge();"),
+            worker.index("await chrome.sidePanel.setPanelBehavior"),
+        )
         self.assertIn('const NATIVE_HOST = "net.llmwiki.google_docs"', worker)
         self.assertIn("activateDocumentTab", worker)
         self.assertIn("chrome.tabs.create", worker)

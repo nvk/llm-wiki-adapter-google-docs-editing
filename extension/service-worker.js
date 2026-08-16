@@ -18,9 +18,11 @@ async function setConnectorState(state, detail = "") {
 }
 
 async function configureExtension() {
+  // Start the governed transport first. Side-panel setup is optional UI and
+  // must never prevent the native connector from coming online.
+  connectNativeBridge();
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   await rememberCurrentNormalWindow();
-  connectNativeBridge();
 }
 
 chrome.runtime.onInstalled.addListener(configureExtension);
