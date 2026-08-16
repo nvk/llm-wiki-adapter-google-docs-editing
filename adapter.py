@@ -15,6 +15,7 @@ from google_docs_adapter.auth import (
     install_client_config,
 )
 from google_docs_adapter.auth_web import authorize_web
+from google_docs_adapter.access import exact_document_authorization_status
 from google_docs_adapter.extension_bridge import extension_root
 from google_docs_adapter.native_messaging import (
     NativeMessagingError,
@@ -53,6 +54,13 @@ def main() -> int:
         action="store_true",
         help="Print the local setup URL without opening the default browser",
     )
+    auth_status_parser = subparsers.add_parser("auth-status")
+    auth_status_parser.add_argument(
+        "--document",
+        required=True,
+        help="Google Docs URL, google-docs resource, or document ID to probe",
+    )
+    auth_status_parser.add_argument("--token", default=str(default_token_path()))
     subparsers.add_parser("extension-path")
     browser_install_parser = subparsers.add_parser("browser-install")
     browser_install_parser.add_argument(
@@ -107,6 +115,18 @@ def main() -> int:
         print("OAuth token stored with mode 0600.")
         for document_id in picked_file_ids:
             print(f"Authorized resource: google-docs:{document_id}")
+        return 0
+    if args.command == "auth-status":
+        try:
+            document_id = document_id_from_reference(args.document)
+            result = exact_document_authorization_status(
+                document_id,
+                Path(args.token),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"Authorization status failed: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, sort_keys=True))
         return 0
     if args.command == "extension-path":
         print(extension_root())

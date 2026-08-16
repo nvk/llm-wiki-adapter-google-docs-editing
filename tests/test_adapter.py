@@ -18,10 +18,13 @@ from google_docs_adapter.auth import (
     DRIVE_FILE_SCOPE,
     TokenProvider,
     _authorization_parameters,
+    complete_authorization,
     document_id_from_reference,
     install_client_config,
 )
 from google_docs_adapter.auth_web import create_local_auth_server
+from google_docs_adapter.access import exact_document_authorization_status
+from google_docs_adapter.client import GoogleDocsError
 from google_docs_adapter.document import tab_text_indexes
 from google_docs_adapter.extension_bridge import (
     BRIDGE_PROTOCOL,
@@ -130,6 +133,89 @@ class FakeExtension:
 
 
 class AdapterTests(unittest.TestCase):
+    def test_additional_picker_grant_preserves_prior_grants_and_refresh_token(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            token_path = Path(temporary) / "token.json"
+            write_private_json(token_path, {
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+                "expires_at": 1,
+                "scope": DRIVE_FILE_SCOPE,
+                "token_type": "Bearer",
+                "token_uri": "https://oauth2.example.test/token",
+                "client_id": "synthetic-client",
+                "granted_file_ids": ["PreviouslyGrantedDocument"],
+            })
+            config = {
+                "client_id": "synthetic-client",
+                "client_secret": "synthetic-secret",
+                "token_uri": "https://oauth2.example.test/token",
+            }
+            with mock.patch("google_docs_adapter.auth._post_form", return_value={
+                "access_token": "new-access",
+                "expires_in": 3600,
+                "scope": DRIVE_FILE_SCOPE,
+                "token_type": "Bearer",
+            }):
+                complete_authorization(
+                    config,
+                    token_path,
+                    "verifier",
+                    "http://127.0.0.1/callback",
+                    "code",
+                    ["NewlyGrantedDocument"],
+                    "NewlyGrantedDocument",
+                )
+            stored = json.loads(token_path.read_text(encoding="utf-8"))
+            self.assertEqual(stored["refresh_token"], "old-refresh")
+            self.assertEqual(stored["granted_file_ids"], [
+                "NewlyGrantedDocument",
+                "PreviouslyGrantedDocument",
+            ])
+
+    def test_exact_document_authorization_status_is_live_and_content_free(self) -> None:
+        class AccessClient:
+            def __init__(self, status: int | None = None) -> None:
+                self.status = status
+
+            def get_document(self, _document_id: str, _mode: str) -> dict:
+                if self.status is not None:
+                    raise GoogleDocsError("synthetic", self.status)
+                return {"documentId": "SyntheticDocument123"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            token_path = Path(temporary) / "token.json"
+            missing = exact_document_authorization_status(
+                "SyntheticDocument123", token_path, client=AccessClient()
+            )
+            self.assertEqual(missing, {
+                "authorized": False,
+                "picker_required": True,
+                "reason": "oauth-token-missing",
+            })
+            write_private_json(token_path, {
+                "access_token": "synthetic-access",
+                "refresh_token": "synthetic-refresh",
+                "expires_at": 9999999999,
+                "client_id": "synthetic-client",
+            })
+            self.assertTrue(exact_document_authorization_status(
+                "SyntheticDocument123", token_path, client=AccessClient()
+            )["authorized"])
+            denied = exact_document_authorization_status(
+                "SyntheticDocument123", token_path, client=AccessClient(404)
+            )
+            self.assertEqual(denied, {
+                "authorized": False,
+                "picker_required": True,
+                "reason": "exact-document-provider-access-missing",
+            })
+            with self.assertRaises(GoogleDocsError):
+                exact_document_authorization_status(
+                    "SyntheticDocument123", token_path, client=AccessClient(500)
+                )
+            self.assertNotIn("SyntheticDocument123", json.dumps(denied))
+
     def test_oauth_uses_desktop_picker_and_drive_file_only(self) -> None:
         parameters = _authorization_parameters(
             "synthetic-client", "http://127.0.0.1:10000/callback", "verifier", "state"

@@ -187,13 +187,8 @@ class TokenProvider:
     path: Path
 
     @classmethod
-    def from_environment(cls) -> "TokenProvider":
-        raw = os.environ.get("GOOGLE_OAUTH_TOKEN_FILE")
-        path = (
-            Path(raw).expanduser().resolve(strict=False)
-            if raw
-            else default_token_path().resolve(strict=False)
-        )
+    def from_path(cls, path: Path) -> "TokenProvider":
+        path = path.expanduser().resolve(strict=False)
         if not path.is_file():
             raise RuntimeError(
                 "Google OAuth token does not exist; run adapter.py auth first"
@@ -201,6 +196,16 @@ class TokenProvider:
         if os.name == "posix" and path.stat().st_mode & 0o077:
             raise RuntimeError("GOOGLE_OAUTH_TOKEN_FILE must not be group/world accessible")
         return cls(path)
+
+    @classmethod
+    def from_environment(cls) -> "TokenProvider":
+        raw = os.environ.get("GOOGLE_OAUTH_TOKEN_FILE")
+        path = (
+            Path(raw).expanduser().resolve(strict=False)
+            if raw
+            else default_token_path().resolve(strict=False)
+        )
+        return cls.from_path(path)
 
     def access_token(self) -> str:
         token = load_json(self.path, "OAuth token")

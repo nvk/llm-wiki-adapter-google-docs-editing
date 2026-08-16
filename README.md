@@ -7,7 +7,7 @@ and verifying those suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.8.5`
+- Version: `0.8.6`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, plans, receipts, journals, and connector messages remain in
@@ -71,6 +71,20 @@ python3 -m venv .venv
 outside the repository. `auth` opens a local **Connect with Google** page, uses
 PKCE and Google Picker, and stores the resulting token separately with mode
 `0600`. Picker is required only when authorizing a genuinely new exact document.
+
+Adapter registration and Google's per-file grant are separate checks. Confirm
+live provider access without printing the document identifier or content:
+
+```bash
+.venv/bin/python adapter.py auth-status \
+  --document 'https://docs.google.com/document/d/<document-id>/edit'
+```
+
+If this returns `picker_required: true`, a bounded user edit instruction already
+authorizes the agent to start the pinned `auth --document` repair. The user must
+complete Google's one-time provider interaction, but should not be asked for a
+second llm-wiki permission or approval hash. Reauthorization preserves the
+refresh token and union of previously granted file IDs.
 
 ## Install the normal-Chrome connector
 
