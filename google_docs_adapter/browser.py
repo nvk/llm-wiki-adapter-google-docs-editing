@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -40,6 +41,64 @@ class BrowserSuggestionDriver:
     def __init__(self, profile_dir: Path | None = None, timeout_seconds: int = 90) -> None:
         self.profile_dir = (profile_dir or browser_profile_path()).resolve(strict=False)
         self.timeout_ms = max(10, timeout_seconds) * 1000
+
+    @staticmethod
+    def _chrome_executable() -> Path:
+        raw = os.environ.get(
+            "GOOGLE_CHROME_EXECUTABLE",
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        )
+        try:
+            executable = Path(raw).expanduser().resolve(strict=True)
+        except OSError as exc:
+            raise GoogleDocsBrowserError(f"Google Chrome executable is unavailable: {raw}") from exc
+        if not executable.is_file():
+            raise GoogleDocsBrowserError(f"Google Chrome executable is unavailable: {raw}")
+        return executable
+
+    def _human_authenticate(self, document_id: str, timeout_seconds: int) -> None:
+        self.profile_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.profile_dir.chmod(0o700)
+        except OSError:
+            pass
+        command = [
+            str(self._chrome_executable()),
+            f"--user-data-dir={self.profile_dir}",
+            "--lang=en-US",
+            "--no-first-run",
+            "--disable-sync",
+            "--password-store=basic",
+            "--use-mock-keychain",
+            document_url(document_id),
+        ]
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            raise GoogleDocsBrowserError(f"could not open normal Chrome for sign-in: {exc}") from exc
+        try:
+            return_code = process.wait(timeout=max(60, timeout_seconds))
+        except subprocess.TimeoutExpired as exc:
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            raise GoogleDocsBrowserError(
+                "normal Chrome sign-in timed out; close the dedicated Chrome window after signing in"
+            ) from exc
+        if return_code != 0:
+            raise GoogleDocsBrowserError(
+                f"normal Chrome sign-in exited unexpectedly with status {return_code}"
+            )
 
     @contextmanager
     def _context(self) -> Iterator[Any]:
@@ -239,10 +298,16 @@ class BrowserSuggestionDriver:
         page.keyboard.press("Escape")
 
     def authenticate(self, document_id: str, timeout_seconds: int = 900) -> None:
+        print(
+            "Normal Chrome opened for Google sign-in. Sign in, confirm the document is editable, "
+            "then close the dedicated Chrome window to continue verification.",
+            flush=True,
+        )
+        self._human_authenticate(document_id, timeout_seconds)
         with self._context() as context:
             page = self._active_page(context)
             page.goto(document_url(document_id), wait_until="domcontentloaded", timeout=self.timeout_ms)
-            self._wait_for_editor(page, max(60, timeout_seconds) * 1000)
+            self._wait_for_editor(page)
 
     def apply(
         self,
