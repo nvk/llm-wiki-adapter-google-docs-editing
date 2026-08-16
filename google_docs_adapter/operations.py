@@ -30,6 +30,7 @@ ACCEPTED = "PREVIEW_SUGGESTIONS_ACCEPTED"
 REJECTED = "PREVIEW_WITHOUT_SUGGESTIONS"
 PLAN_SCHEMA = "google-docs-suggestion-plan/v1"
 EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
+COMMENTS_OMITTED = "COMMENTS_VIEW_MODE_OMITTED"
 
 
 def _response(operation: str, status: str, run_id: str, **values: Any) -> dict[str, Any]:
@@ -264,6 +265,26 @@ def _journal_path(idempotency_key: str) -> Path:
     return root / "journal" / f"{text_hash(idempotency_key)}.json"
 
 
+def _preview_preflight(
+    client: GoogleDocsClient,
+    document_id: str,
+) -> dict[str, Any]:
+    """Prove Developer Preview access with a read before any mutation."""
+    try:
+        document = client.get_document(document_id, INLINE, COMMENTS_OMITTED)
+    except GoogleDocsError as exc:
+        raise RuntimeError(
+            "Google Docs comments and suggestions Developer Preview is unavailable "
+            "for this OAuth project/account; no edit was sent"
+        ) from exc
+    if document.get("commentsViewMode") != COMMENTS_OMITTED:
+        raise RuntimeError(
+            "Google Docs did not confirm comments and suggestions Developer Preview "
+            "access; no edit was sent"
+        )
+    return document
+
+
 def apply_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[str, Any]:
     resource = str(request["arguments"]["document_resource"])
     document_id = document_id_from_resource(resource)
@@ -293,7 +314,7 @@ def apply_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict
             raise RuntimeError("idempotency journal is invalid")
         return response
 
-    current = client.get_document(document_id, INLINE)
+    current = _preview_preflight(client, document_id)
     current_revision = str(current.get("revisionId", ""))
     run_id = text_hash(idempotency_key)[:24]
     if current_revision != expected_revision:
@@ -328,6 +349,9 @@ def apply_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict
         )
         write_private_json(journal_path, {"plan_sha256": plan_sha256, "resource": resource, "response": response})
         return response
+    write_control = result.get("writeControl")
+    if not isinstance(write_control, dict) or write_control.get("writeMode") != "SUGGEST":
+        raise RuntimeError("Google did not confirm suggest-mode execution")
     if result.get("commentUpdateState") != "ALL_SAVED":
         raise RuntimeError(
             f"Google did not save all tracked-change threads: {result.get('commentUpdateState', 'missing state')}"

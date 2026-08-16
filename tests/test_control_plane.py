@@ -41,6 +41,7 @@ class ApiHandler(http.server.BaseHTTPRequestHandler):
     applied = False
     post_count = 0
     last_body: dict = {}
+    preview_supported = True
 
     def do_GET(self) -> None:  # noqa: N802
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -57,6 +58,11 @@ class ApiHandler(http.server.BaseHTTPRequestHandler):
                 "revision-2",
                 ["suggestion-delete", "suggestion-insert"],
             )
+        if (
+            type(self).preview_supported
+            and query.get("commentsViewMode", [""])[0] == "COMMENTS_VIEW_MODE_OMITTED"
+        ):
+            value["commentsViewMode"] = "COMMENTS_VIEW_MODE_OMITTED"
         self._json(200, value)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -96,6 +102,7 @@ class ControlPlaneIntegrationTests(unittest.TestCase):
         adapter = Path(__file__).resolve().parents[1]
         ApiHandler.applied = False
         ApiHandler.post_count = 0
+        ApiHandler.preview_supported = True
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ApiHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -129,7 +136,7 @@ class ControlPlaneIntegrationTests(unittest.TestCase):
                     "LLM_WIKI_GOOGLE_DOCS_API_BASE": f"http://127.0.0.1:{server.server_port}/v1",
                 })
 
-                def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+                def run_raw(*arguments: str) -> subprocess.CompletedProcess[str]:
                     result = subprocess.run(
                         [str(cli), *arguments],
                         env=environment,
@@ -138,11 +145,15 @@ class ControlPlaneIntegrationTests(unittest.TestCase):
                         stderr=subprocess.PIPE,
                         check=False,
                     )
+                    return result
+
+                def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+                    result = run_raw(*arguments)
                     if result.returncode:
                         self.fail(
                             f"llm-wiki command failed ({result.returncode}): "
                             f"{' '.join(arguments)}\nstdout={result.stdout}\nstderr={result.stderr}"
-                        )
+                    )
                     return result
 
                 run(
@@ -190,6 +201,19 @@ class ControlPlaneIntegrationTests(unittest.TestCase):
                     "options": {},
                 })
                 receipt = outputs / "apply-receipt.json"
+                ApiHandler.preview_supported = False
+                failed = run_raw(
+                    "adapter", "run", "google-docs-editing",
+                    "--request", str(apply_request),
+                    "--response", str(outputs / "unsupported-preview-receipt.json"),
+                    "--approve-remote-write", plan_sha,
+                    "--json",
+                )
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertEqual(ApiHandler.post_count, 0)
+                self.assertFalse(ApiHandler.applied)
+
+                ApiHandler.preview_supported = True
                 result = json.loads(run(
                     "adapter", "run", "google-docs-editing",
                     "--request", str(apply_request),

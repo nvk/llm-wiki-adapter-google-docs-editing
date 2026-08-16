@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -55,18 +57,27 @@ class FakeClient:
         self.applied = False
         self.batch_calls: list[dict] = []
 
-    def get_document(self, _document_id: str, mode: str) -> dict:
+    def get_document(
+        self,
+        _document_id: str,
+        mode: str,
+        comments_view_mode: str | None = None,
+    ) -> dict:
         if not self.applied:
-            return document("Alpha beta gamma.\n", "revision-1")
-        if mode == "PREVIEW_WITHOUT_SUGGESTIONS":
-            return document("Alpha beta gamma.\n", "revision-2")
-        if mode == "PREVIEW_SUGGESTIONS_ACCEPTED":
-            return document("Alpha delta gamma.\n", "revision-2")
-        return document(
-            "Alpha delta gamma.\n",
-            "revision-2",
-            ["suggestion-delete", "suggestion-insert"],
-        )
+            value = document("Alpha beta gamma.\n", "revision-1")
+        elif mode == "PREVIEW_WITHOUT_SUGGESTIONS":
+            value = document("Alpha beta gamma.\n", "revision-2")
+        elif mode == "PREVIEW_SUGGESTIONS_ACCEPTED":
+            value = document("Alpha delta gamma.\n", "revision-2")
+        else:
+            value = document(
+                "Alpha delta gamma.\n",
+                "revision-2",
+                ["suggestion-delete", "suggestion-insert"],
+            )
+        if comments_view_mode is not None:
+            value["commentsViewMode"] = comments_view_mode
+        return value
 
     def batch_update(self, _document_id: str, body: dict) -> dict:
         self.batch_calls.append(body)
@@ -257,6 +268,38 @@ class AdapterTests(unittest.TestCase):
         index = tab_text_indexes(value)["tab-1"]
         self.assertEqual(index.locate("🌎")[2:], (3, 5))
 
+    def test_apply_request_helper_runs_from_outside_repository(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        helper = repository / "scripts" / "make_apply_request.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plan = root / "plan.json"
+            request = root / "input" / "apply.json"
+            write_private_json(plan, {
+                "schema": "google-docs-suggestion-plan/v1",
+                "document_resource": RESOURCE,
+                "revision_id": "synthetic-revision",
+            })
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--plan", str(plan),
+                    "--output-dir", str(root / "output"),
+                    "--idempotency-key", "synthetic-helper-key",
+                    "--request", str(request),
+                ],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), sha256_file(plan))
+            value = json.loads(request.read_text(encoding="utf-8"))
+            self.assertEqual(value["remote_write"]["plan_sha256"], sha256_file(plan))
+
     def test_plan_apply_verify_and_idempotency(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -312,6 +355,52 @@ class AdapterTests(unittest.TestCase):
             }, client)
             self.assertEqual(verify_response["status"], "ok")
             self.assertTrue(verify_response["summary"]["verified"])
+
+    def test_missing_preview_confirmation_fails_before_mutation(self) -> None:
+        class UnsupportedPreviewClient(FakeClient):
+            def get_document(
+                self,
+                document_id: str,
+                mode: str,
+                comments_view_mode: str | None = None,
+            ) -> dict:
+                value = super().get_document(document_id, mode)
+                if comments_view_mode is not None:
+                    self.preview_checked = True
+                return value
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"tab_id": "tab-1", "find": "beta", "replace": "delta"}],
+            })
+            client = UnsupportedPreviewClient()
+            plan_response = execute({
+                "operation": "plan",
+                "arguments": {"document_resource": RESOURCE, "edit_spec": str(spec)},
+                "output_dir": str(root / "plan"),
+            }, client)
+            plan = root / "plan" / "plan.json"
+            request = {
+                "operation": "apply",
+                "arguments": {"document_resource": RESOURCE, "plan": str(plan)},
+                "output_dir": str(root / "apply"),
+                "remote_write": {
+                    "plan_sha256": plan_response["summary"]["plan_sha256"],
+                    "idempotency_key": "synthetic-preview-missing",
+                    "expected_revision": "revision-1",
+                },
+            }
+            with mock.patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")}):
+                response = execute(request, client)
+            self.assertEqual(response["status"], "error")
+            self.assertIn("did not confirm", response["errors"][0])
+            self.assertIn("no edit was sent", response["errors"][0])
+            self.assertTrue(client.preview_checked)
+            self.assertEqual(client.batch_calls, [])
+            self.assertFalse(client.applied)
 
     def test_plan_rejects_target_with_existing_suggestion(self) -> None:
         class SuggestedClient(FakeClient):

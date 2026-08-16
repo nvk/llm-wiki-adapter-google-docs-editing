@@ -7,7 +7,7 @@ the document back in accepted and rejected projection modes.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.3.0`
+- Version: `0.4.0`
 
 The repository never stores document content, document identifiers, OAuth
 credentials, tokens, plans, responses, journals, or receipts. All of those are
@@ -19,17 +19,25 @@ Every successful `apply`:
 
 1. is bound to the SHA-256 of the exact plan file;
 2. requires an explicit llm-wiki `--approve-remote-write` flag;
-3. sends `writeControl.writeMode: SUGGEST`;
-4. sends the plan's `requiredRevisionId`;
-5. requires Google's `commentUpdateState: ALL_SAVED`;
-6. captures the created suggestion IDs;
-7. confirms those IDs exist in a `SUGGESTIONS_INLINE` read-back;
-8. confirms the rejected projection equals the pre-write document; and
-9. confirms the accepted projection equals the approved replacement plan.
+3. proves Developer Preview access with a read-only, comments-omitted
+   `commentsViewMode` preflight before sending any edit;
+4. sends `writeControl.writeMode: SUGGEST`;
+5. sends the plan's `requiredRevisionId`;
+6. requires Google to echo `writeMode: SUGGEST` and report
+   `commentUpdateState: ALL_SAVED`;
+7. captures the created suggestion IDs;
+8. confirms those IDs exist in a `SUGGESTIONS_INLINE` read-back;
+9. confirms the rejected projection equals the pre-write document; and
+10. confirms the accepted projection equals the approved replacement plan.
 
 Any failed condition returns an error. A caller-stable idempotency key is
 journaled outside the repository so retrying a successful operation cannot
 create the suggestions twice.
+
+Google can silently ignore Developer Preview request fields for a project that
+is not enrolled. The read-only preflight prevents that behavior from turning an
+approved suggestion into a direct edit: if Preview access is not explicitly
+confirmed, `apply` fails before the mutating `batchUpdate` request.
 
 ## Google prerequisite
 
@@ -177,7 +185,7 @@ in the private output root with mode `0600`.
 ## Current limits
 
 - Developer Preview access is mandatory until Google makes suggestion writes GA.
-- v0.3 supports exact body-text replacements, including multi-tab documents.
+- v0.4 supports exact body-text replacements, including multi-tab documents.
 - Targets may not overlap unresolved suggestions; unrelated suggestions are
   preserved.
 - Header/footer settings, named-range creation, tab changes, and unsupported

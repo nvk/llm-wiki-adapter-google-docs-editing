@@ -65,14 +65,22 @@ class GoogleDocsClient:
             raise GoogleDocsError("Google Docs API response must be an object")
         return value
 
-    def get_document(self, document_id: str, suggestions_view_mode: str) -> dict[str, Any]:
+    def get_document(
+        self,
+        document_id: str,
+        suggestions_view_mode: str,
+        comments_view_mode: str | None = None,
+    ) -> dict[str, Any]:
+        query = {
+            "includeTabsContent": "true",
+            "suggestionsViewMode": suggestions_view_mode,
+        }
+        if comments_view_mode is not None:
+            query["commentsViewMode"] = comments_view_mode
         return self.request(
             "GET",
             f"/documents/{urllib.parse.quote(document_id, safe='')}",
-            query={
-                "includeTabsContent": "true",
-                "suggestionsViewMode": suggestions_view_mode,
-            },
+            query=query,
         )
 
     def batch_update(self, document_id: str, body: dict[str, Any]) -> dict[str, Any]:

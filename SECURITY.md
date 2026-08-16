@@ -7,7 +7,9 @@ receipts, journals, or generated results.
 Runtime access uses the `drive.file` OAuth scope and exact document resources
 registered in llm-wiki's mode-0600 adapter registry. Apply operations require an
 exact approved plan hash and use `requiredRevisionId` plus `writeMode: SUGGEST`.
-A write is successful only when Google reports all suggestion threads saved and
+Before any mutating request, a read-only Developer Preview field must be echoed
+by Google; otherwise the adapter fails closed. A write is successful only when
+Google also echoes suggest mode, reports all suggestion threads saved, and
 read-back verification proves the rejected and accepted projections.
 
 Interactive authorization is served only on a random `127.0.0.1` port. The
