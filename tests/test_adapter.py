@@ -11,6 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from google_docs_adapter.auth import (
@@ -301,6 +302,26 @@ class AdapterTests(unittest.TestCase):
             document_url("SyntheticDocument123", "t.0"),
             "https://docs.google.com/document/d/SyntheticDocument123/edit?tab=t.0",
         )
+
+    def test_browser_launch_failure_stops_playwright_without_masking_error(self) -> None:
+        fake_chromium = mock.Mock()
+        fake_chromium.launch_persistent_context.side_effect = RuntimeError(
+            "synthetic browser launch failure"
+        )
+        fake_playwright = SimpleNamespace(chromium=fake_chromium, stop=mock.Mock())
+        fake_manager = SimpleNamespace(start=mock.Mock(return_value=fake_playwright))
+
+        with mock.patch(
+            "playwright.sync_api.sync_playwright", return_value=fake_manager
+        ):
+            driver = BrowserSuggestionDriver(Path("/tmp/synthetic-browser-profile"))
+            with self.assertRaisesRegex(
+                RuntimeError, "synthetic browser launch failure"
+            ):
+                with driver._context():
+                    self.fail("launch failure must not yield a browser context")
+
+        fake_playwright.stop.assert_called_once_with()
 
     def test_browser_replace_confirms_exact_match_before_mutation(self) -> None:
         driver = BrowserSuggestionDriver(Path("/synthetic/browser-profile"))

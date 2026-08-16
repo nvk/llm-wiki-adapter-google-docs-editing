@@ -81,8 +81,18 @@ class BrowserSuggestionDriver:
             raise GoogleDocsBrowserError(f"could not run the dedicated Chrome profile: {exc}") from exc
         finally:
             if context is not None:
-                context.close()
-            manager.stop()
+                try:
+                    context.close()
+                except Exception:
+                    # Cleanup must not hide the original launch/editor failure.
+                    pass
+            try:
+                playwright.stop()
+            except Exception:
+                # A sandbox may also prevent Playwright from terminating a
+                # browser that failed during startup. Preserve the actionable
+                # browser exception instead of replacing it with cleanup noise.
+                pass
 
     @staticmethod
     def _active_page(context: Any) -> Any:
