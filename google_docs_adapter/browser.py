@@ -70,14 +70,18 @@ class BrowserSuggestionDriver:
             "--disable-sync",
             "--password-store=basic",
             "--use-mock-keychain",
-            document_url(document_id),
         ]
+        if os.environ.get("NONO_ACTIVE_PROFILE") == "custom-codex-google-docs":
+            # Chrome's child Seatbelt cannot be nested inside nono's outer
+            # Seatbelt. Keep nono as the enforcing sandbox and disable only
+            # Chrome's redundant inner sandbox for this dedicated profile.
+            command.append("--no-sandbox")
+        command.append(document_url(document_id))
         try:
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
             )
         except OSError as exc:
             raise GoogleDocsBrowserError(f"could not open normal Chrome for sign-in: {exc}") from exc

@@ -329,6 +329,7 @@ class AdapterTests(unittest.TestCase):
         driver = BrowserSuggestionDriver(Path("/tmp/synthetic-browser-profile"))
 
         with (
+            mock.patch.dict(os.environ, {}, clear=True),
             mock.patch.object(
                 driver,
                 "_chrome_executable",
@@ -347,6 +348,31 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn("--no-sandbox", command)
         self.assertEqual(command[-1], document_url("SyntheticDocument123"))
         process.wait.assert_called_once_with(timeout=120)
+
+    def test_browser_auth_disables_only_nested_chrome_sandbox_under_nono(self) -> None:
+        process = mock.Mock()
+        process.wait.return_value = 0
+        driver = BrowserSuggestionDriver(Path("/tmp/synthetic-browser-profile"))
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"NONO_ACTIVE_PROFILE": "custom-codex-google-docs"},
+                clear=True,
+            ),
+            mock.patch.object(
+                driver,
+                "_chrome_executable",
+                return_value=Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            ),
+            mock.patch("google_docs_adapter.browser.subprocess.Popen", return_value=process) as popen,
+        ):
+            driver._human_authenticate("SyntheticDocument123", timeout_seconds=120)
+
+        command = popen.call_args.args[0]
+        self.assertIn("--no-sandbox", command)
+        self.assertNotIn("--enable-automation", command)
+        self.assertNotIn("--remote-debugging-pipe", command)
 
     def test_browser_replace_confirms_exact_match_before_mutation(self) -> None:
         driver = BrowserSuggestionDriver(Path("/synthetic/browser-profile"))
