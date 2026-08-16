@@ -2,15 +2,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import http.server
 import json
 import os
-import secrets
-import threading
 import time
 import urllib.parse
 import urllib.request
-import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +20,10 @@ DEFAULT_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
 def default_token_path() -> Path:
     return Path.home() / ".config" / "llm-wiki" / "google-docs-editing" / "token.json"
+
+
+def default_client_path() -> Path:
+    return Path.home() / ".config" / "llm-wiki" / "google-docs-editing" / "oauth-client.json"
 
 
 def _post_form(url: str, fields: dict[str, str]) -> dict[str, Any]:
@@ -58,45 +58,45 @@ def _client_config(path: Path) -> dict[str, Any]:
     return _client_config_value(load_json(path, "OAuth client configuration"))
 
 
+def client_config_from_environment() -> dict[str, Any]:
+    raw = os.environ.get("GOOGLE_OAUTH_CLIENT_FILE")
+    path = (
+        Path(raw).expanduser().resolve(strict=False)
+        if raw
+        else default_client_path().resolve(strict=False)
+    )
+    if not path.is_file():
+        raise RuntimeError(
+            "this adapter installation has no managed Google OAuth client; "
+            "the adapter owner must run adapter.py configure-oauth once"
+        )
+    if os.name == "posix" and path.stat().st_mode & 0o077:
+        raise RuntimeError("GOOGLE_OAUTH_CLIENT_FILE must not be group/world accessible")
+    return _client_config(path)
+
+
+def install_client_config(source: Path, destination: Path) -> Path:
+    config = _client_config(source)
+    installed = {
+        "client_id": config["client_id"],
+        "client_secret": config["client_secret"],
+        "token_uri": config.get("token_uri") or DEFAULT_TOKEN_ENDPOINT,
+    }
+    destination = destination.expanduser().resolve(strict=False)
+    write_private_json(destination, {"installed": installed})
+    return destination
+
+
 def document_id_from_reference(value: str) -> str:
     raw = value.strip()
     if raw.startswith("google-docs:"):
         raw = raw.removeprefix("google-docs:")
     elif raw.startswith("https://docs.google.com/document/d/"):
         raw = raw.removeprefix("https://docs.google.com/document/d/").split("/", 1)[0]
-    if not raw or len(raw) > 256 or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for character in raw):
+    allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+    if not raw or len(raw) > 256 or any(character not in allowed for character in raw):
         raise ValueError("document must be a Google Docs URL, google-docs resource, or document ID")
     return raw
-
-
-class _CallbackHandler(http.server.BaseHTTPRequestHandler):
-    result: dict[str, str] = {}
-    expected_state = ""
-    event = threading.Event()
-
-    def do_GET(self) -> None:  # noqa: N802
-        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        state = query.get("state", [""])[0]
-        code = query.get("code", [""])[0]
-        error = query.get("error", [""])[0]
-        picked_file_ids = query.get("picked_file_ids", [""])[0]
-        if state != self.expected_state:
-            error = "invalid OAuth state"
-        type(self).result = {
-            "code": code,
-            "error": error,
-            "picked_file_ids": picked_file_ids,
-        }
-        body = b"Authorization received. You may close this tab."
-        self.send_response(200 if code and not error else 400)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-        type(self).event.set()
-
-    def log_message(self, _format: str, *_args: object) -> None:
-        return
 
 
 def _authorization_parameters(
@@ -106,7 +106,11 @@ def _authorization_parameters(
     state: str,
     document_id: str | None = None,
 ) -> dict[str, str]:
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode("ascii")
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode("ascii")
+    )
     parameters = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -170,57 +174,12 @@ def complete_authorization(
         "token_type": token.get("token_type", "Bearer"),
         "token_uri": token_endpoint,
         "client_id": config["client_id"],
-        "client_secret": config["client_secret"],
         "granted_file_ids": sorted(prior_file_ids | set(picked_file_ids)),
     }
     if not stored["refresh_token"]:
         raise RuntimeError("OAuth response did not include a refresh token")
     write_private_json(token_path, stored)
     return picked_file_ids
-
-
-def authorize(
-    client_secrets: Path,
-    token_path: Path,
-    timeout: int = 300,
-    expected_document_id: str | None = None,
-) -> list[str]:
-    config = _client_config(client_secrets)
-    verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode("ascii")
-    state = secrets.token_urlsafe(32)
-    _CallbackHandler.result = {}
-    _CallbackHandler.expected_state = state
-    _CallbackHandler.event = threading.Event()
-    server = http.server.HTTPServer(("127.0.0.1", 0), _CallbackHandler)
-    redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
-    parameters = _authorization_parameters(
-        str(config["client_id"]), redirect_uri, verifier, state, expected_document_id
-    )
-    url = AUTHORIZATION_ENDPOINT + "?" + urllib.parse.urlencode(parameters)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    print("Open this URL if the browser does not open automatically:")
-    print(url)
-    webbrowser.open(url)
-    if not _CallbackHandler.event.wait(timeout):
-        server.shutdown()
-        raise RuntimeError("OAuth authorization timed out")
-    server.shutdown()
-    result = _CallbackHandler.result
-    if result.get("error") or not result.get("code"):
-        raise RuntimeError(f"OAuth authorization failed: {result.get('error', 'missing code')}")
-    picked_file_ids = [
-        value for value in result.get("picked_file_ids", "").split(",") if value
-    ]
-    return complete_authorization(
-        config,
-        token_path,
-        verifier,
-        redirect_uri,
-        result["code"],
-        picked_file_ids,
-        expected_document_id,
-    )
 
 
 @dataclass
@@ -248,14 +207,20 @@ class TokenProvider:
         access_token = token.get("access_token")
         if access_token and int(token.get("expires_at", 0)) > int(time.time()) + 60:
             return str(access_token)
-        required = ("refresh_token", "client_id", "client_secret")
+        required = ("refresh_token", "client_id")
         if any(not token.get(field) for field in required):
             raise RuntimeError("OAuth token cannot be refreshed")
+        client_secret = token.pop("client_secret", None)
+        if not client_secret:
+            config = client_config_from_environment()
+            if config["client_id"] != token["client_id"]:
+                raise RuntimeError("managed OAuth client does not match the stored user token")
+            client_secret = config["client_secret"]
         refreshed = _post_form(
             str(token.get("token_uri") or DEFAULT_TOKEN_ENDPOINT),
             {
                 "client_id": str(token["client_id"]),
-                "client_secret": str(token["client_secret"]),
+                "client_secret": str(client_secret),
                 "refresh_token": str(token["refresh_token"]),
                 "grant_type": "refresh_token",
             },

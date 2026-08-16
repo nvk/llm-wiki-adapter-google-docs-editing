@@ -5,6 +5,8 @@ import html
 import http.server
 import json
 import secrets
+import subprocess
+import sys
 import threading
 import urllib.parse
 import webbrowser
@@ -15,17 +17,14 @@ from typing import Any
 from .auth import (
     AUTHORIZATION_ENDPOINT,
     _authorization_parameters,
-    _client_config_value,
     complete_authorization,
 )
 
-MAX_CLIENT_CONFIG_BYTES = 64 * 1024
-MAX_REQUEST_BYTES = MAX_CLIENT_CONFIG_BYTES + 4096
+MAX_REQUEST_BYTES = 4096
 
 
 @dataclass
 class _Flow:
-    config: dict[str, Any]
     verifier: str
     state: str
     redirect_uri: str
@@ -34,8 +33,8 @@ class _Flow:
 @dataclass
 class LocalAuthState:
     token_path: Path
+    client_config: dict[str, Any]
     expected_document_id: str | None
-    timeout: int
     csrf_token: str
     page_nonce: str
     base_url: str = ""
@@ -67,8 +66,6 @@ def _page(state: LocalAuthState) -> bytes:
     h1 {{ margin: 8px 0 10px; font-size: clamp(28px, 5vw, 42px); line-height: 1.05; }}
     p, li {{ color: #cbd5ef; line-height: 1.55; }}
     .privacy {{ background: #0d1428; border-radius: 12px; padding: 14px 16px; margin: 20px 0; }}
-    label {{ display: block; margin: 22px 0 8px; font-weight: 700; }}
-    input[type=file] {{ box-sizing: border-box; width: 100%; padding: 14px; border: 1px dashed #6574a8; border-radius: 12px; background: #0d1428; color: #edf2ff; }}
     button {{ margin-top: 16px; width: 100%; padding: 14px 18px; border: 0; border-radius: 12px; background: #6d7cff; color: white; font: inherit; font-weight: 800; cursor: pointer; }}
     button:disabled {{ cursor: wait; opacity: .65; }}
     #status {{ min-height: 24px; color: #ffcf7d; }}
@@ -83,21 +80,15 @@ def _page(state: LocalAuthState) -> bytes:
     <h1>Connect Google Docs</h1>
     <p>{html.escape(pinned)}</p>
     <div class="privacy">
-      This page is served only on <code>127.0.0.1</code>. Your Desktop OAuth
-      client JSON is sent only to this local process, is never uploaded by the
-      adapter, and is not retained as a separate file. The credentials needed
-      for token refresh are stored only inside the mode-0600 token file.
+      This page is served only on <code>127.0.0.1</code>. The adapter owner has
+      already provisioned the Google app identity. Your Google token and
+      selected document grant remain private on this machine.
     </div>
-    <ol>
-      <li>Use a Google Cloud project enrolled in the Workspace Developer Preview.</li>
-      <li>Enable Google Docs, Drive, and Picker APIs.</li>
-      <li>Create an OAuth client with application type <strong>Desktop app</strong> and download its JSON.</li>
-    </ol>
-    <p><a href="https://developers.google.com/workspace/preview" target="_blank" rel="noreferrer noopener">Developer Preview setup</a> · <a href="https://developers.google.com/workspace/drive/picker/guides/desktop-mobile-picker" target="_blank" rel="noreferrer noopener">Google Picker setup</a></p>
+    <p>Google will ask you to sign in, approve access to the selected file, and
+    confirm the document in Picker. The adapter requests only
+    <code>drive.file</code> access.</p>
     <form id="connect">
-      <label for="credentials">Desktop OAuth client JSON</label>
-      <input id="credentials" type="file" accept="application/json,.json" required>
-      <button id="submit" type="submit">Continue to Google</button>
+      <button id="submit" type="submit">Connect with Google</button>
       <p id="status" role="status" aria-live="polite"></p>
     </form>
   </section>
@@ -105,22 +96,17 @@ def _page(state: LocalAuthState) -> bytes:
 <script nonce="{state.page_nonce}">
   const csrfToken = {csrf_json};
   const form = document.getElementById('connect');
-  const input = document.getElementById('credentials');
   const button = document.getElementById('submit');
   const status = document.getElementById('status');
   form.addEventListener('submit', async (event) => {{
     event.preventDefault();
     button.disabled = true;
-    status.textContent = 'Reading the credential locally…';
+    status.textContent = 'Opening Google authorization…';
     try {{
-      const file = input.files[0];
-      if (!file || file.size > {MAX_CLIENT_CONFIG_BYTES}) throw new Error('Choose a Google Desktop OAuth client JSON under 64 KiB.');
-      const clientSecrets = JSON.parse(await file.text());
-      input.value = '';
       const response = await fetch('/start', {{
         method: 'POST',
         headers: {{'Content-Type': 'application/json'}},
-        body: JSON.stringify({{csrf_token: csrfToken, client_secrets: clientSecrets}}),
+        body: JSON.stringify({{csrf_token: csrfToken}}),
         cache: 'no-store',
       }});
       const result = await response.json();
@@ -209,7 +195,7 @@ def _handler_for(state: LocalAuthState) -> type[http.server.BaseHTTPRequestHandl
                 if error:
                     raise RuntimeError(f"Google authorization failed: {error}")
                 state.picked_file_ids = complete_authorization(
-                    flow.config,
+                    state.client_config,
                     state.token_path,
                     flow.verifier,
                     flow.redirect_uri,
@@ -244,24 +230,20 @@ def _handler_for(state: LocalAuthState) -> type[http.server.BaseHTTPRequestHandl
             except ValueError:
                 length = 0
             if length <= 0 or length > MAX_REQUEST_BYTES:
-                self._send_json(413, {"error": "OAuth client JSON is too large or empty"})
+                self._send_json(413, {"error": "local authorization request is too large or empty"})
                 return
             try:
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 if not isinstance(payload, dict) or payload.get("csrf_token") != state.csrf_token:
                     raise ValueError("invalid local session token")
-                client_secrets = payload.get("client_secrets")
-                if not isinstance(client_secrets, dict):
-                    raise ValueError("OAuth client JSON must be an object")
-                config = _client_config_value(client_secrets)
                 if state.flow is not None:
                     raise ValueError("authorization is already in progress")
                 verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode("ascii")
                 oauth_state = secrets.token_urlsafe(32)
                 redirect_uri = state.base_url + "/callback"
-                state.flow = _Flow(config, verifier, oauth_state, redirect_uri)
+                state.flow = _Flow(verifier, oauth_state, redirect_uri)
                 parameters = _authorization_parameters(
-                    str(config["client_id"]),
+                    str(state.client_config["client_id"]),
                     redirect_uri,
                     verifier,
                     oauth_state,
@@ -281,13 +263,13 @@ def _handler_for(state: LocalAuthState) -> type[http.server.BaseHTTPRequestHandl
 
 def create_local_auth_server(
     token_path: Path,
-    timeout: int,
+    client_config: dict[str, Any],
     expected_document_id: str | None = None,
 ) -> tuple[http.server.HTTPServer, LocalAuthState]:
     state = LocalAuthState(
         token_path=token_path.resolve(strict=False),
+        client_config=client_config,
         expected_document_id=expected_document_id,
-        timeout=timeout,
         csrf_token=secrets.token_urlsafe(32),
         page_nonce=secrets.token_urlsafe(24),
         event=threading.Event(),
@@ -297,19 +279,36 @@ def create_local_auth_server(
     return server, state
 
 
+def _open_system_browser(url: str) -> None:
+    if sys.platform == "darwin":
+        try:
+            subprocess.Popen(
+                ["open", url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return
+        except OSError:
+            pass
+    threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
+
+
 def authorize_web(
+    client_config: dict[str, Any],
     token_path: Path,
     timeout: int = 600,
     expected_document_id: str | None = None,
     open_browser: bool = True,
 ) -> list[str]:
-    server, state = create_local_auth_server(token_path, timeout, expected_document_id)
+    server, state = create_local_auth_server(token_path, client_config, expected_document_id)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     print("Local Google Docs authorization page:", flush=True)
     print(state.base_url, flush=True)
     if open_browser:
-        webbrowser.open(state.base_url)
+        _open_system_browser(state.base_url)
     try:
         if state.event is None or not state.event.wait(timeout):
             raise RuntimeError("local Google authorization timed out")

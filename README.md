@@ -7,7 +7,7 @@ the document back in accepted and rejected projection modes.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.2.0`
+- Version: `0.3.0`
 
 The repository never stores document content, document identifiers, OAuth
 credentials, tokens, plans, responses, journals, or receipts. All of those are
@@ -43,6 +43,12 @@ app** client for that project. The adapter requests only
 This private adapter must not be shared as a public application while the
 feature remains Pre-GA.
 
+Google does not permit OAuth clients to be created or modified
+programmatically. Creating the application identity in Google Cloud Console is
+a one-time adapter-owner responsibility, not an end-user authorization step.
+The downloaded client configuration is installed outside the repository. Users
+then see only a **Connect with Google** button, Google consent, and Picker.
+
 ## Install and authenticate
 
 The runtime has no third-party Python dependencies:
@@ -50,36 +56,32 @@ The runtime has no third-party Python dependencies:
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python adapter.py configure-oauth \
+  --client-secrets /absolute/private/downloaded-desktop-client.json
 .venv/bin/python adapter.py auth \
   --document 'https://docs.google.com/document/d/<document-id>/edit'
 ```
 
-With no `--client-secrets` argument, the auth command opens a local setup page
-on a random `127.0.0.1` port. Choose the downloaded Google OAuth **Desktop app**
-JSON there, then continue to Google's consent screen and Picker. The optional
-`--document` value pins Picker to that exact document. The local page sends the
-credential only to the loopback process, never stores the original upload, and
-has no third-party scripts or assets. The client credentials needed for refresh
-are retained only inside the private token file.
+`configure-oauth` is the one-time owner provisioning command. It validates and
+copies only the required Desktop client fields to the private mode-0600 profile
+at `~/.config/llm-wiki/google-docs-editing/oauth-client.json`. The original
+download remains external and can be removed after secure backup. Never commit
+either file.
 
-For scripted setup, bypass the local page and pass the file directly:
+The normal `auth` command opens a one-click local page on a random `127.0.0.1`
+port. It never asks the user for a credential file. **Connect with Google**
+continues to Google's consent screen and Picker. The optional `--document`
+value pins Picker to that exact document. The flow uses PKCE, a per-run OAuth
+state, and only the `drive.file` scope; it filters to native Google Docs and
+prints the selected exact `google-docs:<document-id>` resource.
 
-```bash
-.venv/bin/python adapter.py auth \
-  --client-secrets /absolute/private/oauth-client.json \
-  --document 'google-docs:<document-id>'
-```
-
-Both auth paths use a random loopback callback, PKCE, a per-run OAuth state,
-and only the `drive.file` scope. They open Google's desktop Picker, filter to
-native Google Docs, and print the exact `google-docs:<document-id>` resource
-selected by the user.
-The default token path is
-`~/.config/llm-wiki/google-docs-editing/token.json`. Override it with `--token`
-or `GOOGLE_OAUTH_TOKEN_FILE` when needed. Keep all credential files outside this
-repository. Run `auth` again to grant
-the same OAuth client access to another document; previously selected file IDs
-remain recorded in the private token metadata.
+The user token is stored separately at
+`~/.config/llm-wiki/google-docs-editing/token.json` with mode `0600`; it does
+not duplicate the managed client secret. Override the managed profile with
+`GOOGLE_OAUTH_CLIENT_FILE` and the token with `GOOGLE_OAUTH_TOKEN_FILE` when
+needed. Keep all credential material outside this repository.
+Run `auth` again to grant the same OAuth client access to another document;
+previously selected file IDs remain recorded in the private token metadata.
 
 The default idempotency journal is
 `~/.local/state/llm-wiki/google-docs-editing`. Optional path overrides belong in
@@ -87,10 +89,11 @@ the launcher environment, not in the repository or adapter registry:
 
 ```bash
 export GOOGLE_OAUTH_TOKEN_FILE=/absolute/private/google-docs-token.json
+export GOOGLE_OAUTH_CLIENT_FILE=/absolute/private/google-docs-oauth-client.json
 export LLM_WIKI_GOOGLE_DOCS_STATE_DIR=/absolute/private/google-docs-state
 ```
 
-When using either override, add its name with `adapter add --env <NAME>` so the
+When using any override, add its name with `adapter add --env <NAME>` so the
 sanitized llm-wiki launcher passes it through.
 
 ## Register one document
@@ -174,7 +177,7 @@ in the private output root with mode `0600`.
 ## Current limits
 
 - Developer Preview access is mandatory until Google makes suggestion writes GA.
-- v0.2 supports exact body-text replacements, including multi-tab documents.
+- v0.3 supports exact body-text replacements, including multi-tab documents.
 - Targets may not overlap unresolved suggestions; unrelated suggestions are
   preserved.
 - Header/footer settings, named-range creation, tab changes, and unsupported

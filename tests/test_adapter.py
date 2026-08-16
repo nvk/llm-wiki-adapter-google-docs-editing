@@ -13,8 +13,10 @@ from unittest import mock
 
 from google_docs_adapter.auth import (
     DRIVE_FILE_SCOPE,
+    TokenProvider,
     _authorization_parameters,
     document_id_from_reference,
+    install_client_config,
 )
 from google_docs_adapter.auth_web import create_local_auth_server
 from google_docs_adapter.document import tab_text_indexes
@@ -116,11 +118,18 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertEqual(parameters["file_ids"], document_id)
 
-    def test_local_oauth_page_keeps_upload_local_and_stores_private_token(self) -> None:
+    def test_local_oauth_page_is_one_click_and_stores_private_token(self) -> None:
         document_id = "SyntheticDocument123"
         with tempfile.TemporaryDirectory() as temporary:
             token_path = Path(temporary) / "token.json"
-            server, state = create_local_auth_server(token_path, 30, document_id)
+            client_config = {
+                "client_id": "synthetic-client",
+                "client_secret": "synthetic-secret",
+                "token_uri": "https://oauth2.example.test/token",
+            }
+            server, state = create_local_auth_server(
+                token_path, client_config, document_id
+            )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
@@ -130,16 +139,11 @@ class AdapterTests(unittest.TestCase):
                     self.assertEqual(response.headers["X-Frame-Options"], "DENY")
                 self.assertIn("Connect Google Docs", page)
                 self.assertNotIn("synthetic-secret", page)
+                self.assertNotIn('type="file"', page)
+                self.assertIn("Connect with Google", page)
 
                 payload = json.dumps({
                     "csrf_token": state.csrf_token,
-                    "client_secrets": {
-                        "installed": {
-                            "client_id": "synthetic-client",
-                            "client_secret": "synthetic-secret",
-                            "token_uri": "https://oauth2.example.test/token",
-                        }
-                    },
                 }).encode("utf-8")
                 bad_request = urllib.request.Request(
                     state.base_url + "/start",
@@ -194,13 +198,57 @@ class AdapterTests(unittest.TestCase):
                 post_form.assert_called_once()
                 token = json.loads(token_path.read_text(encoding="utf-8"))
                 self.assertEqual(token["granted_file_ids"], [document_id])
-                self.assertEqual(token["client_secret"], "synthetic-secret")
+                self.assertNotIn("client_secret", token)
                 if os.name == "posix":
                     self.assertEqual(token_path.stat().st_mode & 0o077, 0)
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_managed_client_install_and_token_refresh_are_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "downloaded-client.json"
+            profile = root / "private" / "oauth-client.json"
+            write_private_json(source, {
+                "installed": {
+                    "client_id": "synthetic-client",
+                    "client_secret": "synthetic-secret",
+                    "auth_uri": "https://accounts.example.test/auth",
+                    "token_uri": "https://oauth2.example.test/token",
+                    "project_id": "synthetic-project",
+                }
+            })
+            install_client_config(source, profile)
+            installed = json.loads(profile.read_text(encoding="utf-8"))
+            self.assertEqual(set(installed["installed"]), {
+                "client_id", "client_secret", "token_uri"
+            })
+            token_path = root / "token.json"
+            write_private_json(token_path, {
+                "access_token": "expired-access",
+                "refresh_token": "synthetic-refresh",
+                "expires_at": 0,
+                "scope": DRIVE_FILE_SCOPE,
+                "token_type": "Bearer",
+                "token_uri": "https://oauth2.example.test/token",
+                "client_id": "synthetic-client",
+                "granted_file_ids": ["SyntheticDocument123"],
+            })
+            with mock.patch.dict(os.environ, {
+                "GOOGLE_OAUTH_CLIENT_FILE": str(profile)
+            }), mock.patch("google_docs_adapter.auth._post_form", return_value={
+                "access_token": "refreshed-access",
+                "expires_in": 3600,
+                "scope": DRIVE_FILE_SCOPE,
+                "token_type": "Bearer",
+            }) as post_form:
+                self.assertEqual(TokenProvider(token_path).access_token(), "refreshed-access")
+            fields = post_form.call_args.args[1]
+            self.assertEqual(fields["client_secret"], "synthetic-secret")
+            refreshed = json.loads(token_path.read_text(encoding="utf-8"))
+            self.assertNotIn("client_secret", refreshed)
 
     def test_self_test_and_utf16_indexing(self) -> None:
         response = execute({"operation": "self-test"})

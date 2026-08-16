@@ -11,12 +11,13 @@ A write is successful only when Google reports all suggestion threads saved and
 read-back verification proves the rejected and accepted projections.
 
 Interactive authorization is served only on a random `127.0.0.1` port. The
-setup page uses a per-run local CSRF token, strict same-origin POST validation,
-PKCE, OAuth state validation, no-store headers, a restrictive CSP, and no remote
-scripts or assets. Uploaded Desktop client JSON is parsed in memory and is not
-retained as a separate file. The client credentials required to refresh OAuth
-are stored only in the mode-0600 token file. An optional document pin is passed
-to Picker and independently checked on callback.
+one-click page uses a per-run local CSRF token, strict same-origin POST
+validation, PKCE, OAuth state validation, no-store headers, a restrictive CSP,
+and no remote scripts or assets. The adapter owner provisions the Desktop app
+identity once into a mode-0600 machine-local profile; end users never upload
+client credentials. User tokens are stored in a separate mode-0600 file and do
+not duplicate the managed client secret. An optional document pin is passed to
+Picker and independently checked on callback.
 
 The Google suggestion-writing API is Developer Preview. Use it only with an
 enrolled Google Workspace account and allowlisted Cloud project. Preview APIs

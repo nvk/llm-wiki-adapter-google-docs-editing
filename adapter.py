@@ -7,7 +7,13 @@ import os
 import sys
 from pathlib import Path
 
-from google_docs_adapter.auth import authorize, default_token_path, document_id_from_reference
+from google_docs_adapter.auth import (
+    client_config_from_environment,
+    default_client_path,
+    default_token_path,
+    document_id_from_reference,
+    install_client_config,
+)
 from google_docs_adapter.auth_web import authorize_web
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import load_json, write_private_json
@@ -25,11 +31,10 @@ def main() -> int:
     execute_parser = subparsers.add_parser("execute")
     execute_parser.add_argument("--request", required=True)
     execute_parser.add_argument("--response", required=True)
+    configure_parser = subparsers.add_parser("configure-oauth")
+    configure_parser.add_argument("--client-secrets", required=True)
+    configure_parser.add_argument("--destination", default=str(default_client_path()))
     auth_parser = subparsers.add_parser("auth")
-    auth_parser.add_argument(
-        "--client-secrets",
-        help="Desktop OAuth client JSON; omit to choose it in a local setup page",
-    )
     auth_parser.add_argument(
         "--document",
         help="Optional Google Docs URL, google-docs resource, or document ID to pin in Picker",
@@ -52,24 +57,29 @@ def main() -> int:
             "capabilities": manifest["capabilities"],
         }, sort_keys=True))
         return 0
+    if args.command == "configure-oauth":
+        try:
+            install_client_config(
+                Path(args.client_secrets).expanduser().resolve(strict=True),
+                Path(args.destination),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"OAuth client provisioning failed: {exc}", file=sys.stderr)
+            return 2
+        print("Managed Google OAuth client installed with mode 0600.")
+        return 0
     if args.command == "auth":
         try:
             document_id = document_id_from_reference(args.document) if args.document else None
             token_path = Path(args.token).expanduser().resolve(strict=False)
-            if args.client_secrets:
-                picked_file_ids = authorize(
-                    Path(args.client_secrets).expanduser().resolve(strict=True),
-                    token_path,
-                    args.timeout,
-                    document_id,
-                )
-            else:
-                picked_file_ids = authorize_web(
-                    token_path,
-                    args.timeout,
-                    document_id,
-                    open_browser=not args.no_open_browser,
-                )
+            client_config = client_config_from_environment()
+            picked_file_ids = authorize_web(
+                client_config,
+                token_path,
+                args.timeout,
+                document_id,
+                open_browser=not args.no_open_browser,
+            )
         except (OSError, RuntimeError, ValueError) as exc:
             print(f"Authorization failed: {exc}", file=sys.stderr)
             return 2
