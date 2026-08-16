@@ -313,6 +313,8 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("No extension click is required", sidepanel)
         self.assertIn("findReplaceContextExpression", worker)
         self.assertIn("findReplaceMenuItemExpression", worker)
+        self.assertIn("focusFindReplaceMenuItemExpression", worker)
+        self.assertIn("activateFindReplaceMenuItem", worker)
         self.assertIn("suggestingDiagnosticsExpression", worker)
         self.assertIn(
             'const modifiers = platform.toLowerCase().includes("mac") ? 13 : 11;',

@@ -654,6 +654,25 @@ function findReplaceMenuItemExpression() {
   })()`;
 }
 
+function focusFindReplaceMenuItemExpression() {
+  return `(() => {
+    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+    const element = Array.from(document.querySelectorAll('[role="menuitem"],[role="option"]'))
+      .find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const style = getComputedStyle(candidate);
+        if (rect.width <= 0 || rect.height <= 0 || style.visibility === "hidden" || style.display === "none") return false;
+        const name = normalize([
+          candidate.getAttribute("aria-label"), candidate.getAttribute("data-tooltip"), candidate.textContent,
+        ].filter(Boolean).join(" "));
+        return name === "find and replace" || name.startsWith("find and replace ");
+      });
+    if (!element) return false;
+    element.focus();
+    return true;
+  })()`;
+}
+
 async function findReplaceOpen(tabId) {
   const controls = await findReplaceAXState(tabId);
   if (controls.findInput && controls.replaceInput) return true;
@@ -678,44 +697,71 @@ async function dispatchShortcut(tabId, key, code, modifiers) {
   });
 }
 
-async function openFindReplace(tabId) {
-  if (await findReplaceOpen(tabId)) return;
-  await clickSelector(tabId, "#docs-edit-menu");
+async function waitForFindReplaceOpen(tabId, timeoutMs) {
   try {
-    let menuItem = null;
-    let menuAXItem = null;
-    await waitFor(
-      async () => {
-        menuItem = await evaluate(tabId, findReplaceMenuItemExpression());
-        menuAXItem = menuItem ? null : await findReplaceAXMenuItem(tabId);
-        return Boolean(menuItem || menuAXItem);
-      },
-      "",
-      2500,
-    );
+    await waitFor(async () => findReplaceOpen(tabId), "", timeoutMs);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function activateFindReplaceMenuItem(tabId, keyboard = false) {
+  await clickSelector(tabId, "#docs-edit-menu");
+  let menuItem = null;
+  let menuAXItem = null;
+  await waitFor(
+    async () => {
+      menuItem = await evaluate(tabId, findReplaceMenuItemExpression());
+      menuAXItem = menuItem ? null : await findReplaceAXMenuItem(tabId);
+      return Boolean(menuItem || menuAXItem);
+    },
+    "The Find and replace menu item is unavailable.",
+    2500,
+  );
+  if (!keyboard) {
     if (menuItem) {
       await clickPoint(tabId, menuItem);
-    } else if (!await clickAXNode(tabId, menuAXItem)) {
-      throw new Error("The Find and replace menu item is unavailable.");
+      return;
     }
-  } catch (_error) {
-    await dispatchShortcut(tabId, "Escape", "Escape", 0);
-    const platform = String(await evaluate(tabId, "navigator.platform || ''"));
-    const modifiers = platform.toLowerCase().includes("mac") ? 12 : 2;
-    await dispatchShortcut(tabId, "H", "KeyH", modifiers);
+    if (await clickAXNode(tabId, menuAXItem)) return;
+    throw new Error("The Find and replace menu item is unavailable.");
   }
-  await waitFor(
-    async () => findReplaceOpen(tabId),
-    "",
-    30000,
-  ).catch(async () => {
-    const diagnostics = await findReplaceAXDiagnostics(tabId);
-    throw new Error(
-      `Google Docs Find and replace did not open. ` +
-      `(dialog=${diagnostics.dialog}; textbox=${diagnostics.textbox}; ` +
-      `find=${diagnostics.find}; replace=${diagnostics.replace})`,
-    );
-  });
+  const focused = menuAXItem
+    ? await focusAXNode(tabId, menuAXItem)
+    : await evaluate(tabId, focusFindReplaceMenuItemExpression());
+  if (!focused) {
+    throw new Error("The Find and replace menu item is unavailable.");
+  }
+  await dispatchShortcut(tabId, "Enter", "Enter", 0);
+}
+
+async function openFindReplace(tabId) {
+  if (await findReplaceOpen(tabId)) return;
+  try {
+    await activateFindReplaceMenuItem(tabId);
+  } catch (_error) {
+    // The documented shortcut below is the first fallback when menu discovery fails.
+  }
+  if (await waitForFindReplaceOpen(tabId, 4000)) return;
+  await dispatchShortcut(tabId, "Escape", "Escape", 0);
+  const platform = String(await evaluate(tabId, "navigator.platform || ''"));
+  const modifiers = platform.toLowerCase().includes("mac") ? 12 : 2;
+  await dispatchShortcut(tabId, "H", "KeyH", modifiers);
+  if (await waitForFindReplaceOpen(tabId, 5000)) return;
+  await dispatchShortcut(tabId, "Escape", "Escape", 0);
+  try {
+    await activateFindReplaceMenuItem(tabId, true);
+  } catch (_error) {
+    // The bounded final wait below produces content-free diagnostics.
+  }
+  if (await waitForFindReplaceOpen(tabId, 15000)) return;
+  const diagnostics = await findReplaceAXDiagnostics(tabId);
+  throw new Error(
+    `Google Docs Find and replace did not open. ` +
+    `(dialog=${diagnostics.dialog}; textbox=${diagnostics.textbox}; ` +
+    `find=${diagnostics.find}; replace=${diagnostics.replace})`,
+  );
 }
 
 async function focusFindReplaceAXInput(tabId, kind) {
