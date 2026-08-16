@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Wiki Suggestions</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">LLM WIKI</p>
+        <h1>Google Docs suggestions</h1>
+        <p class="lede">Applies only a locally approved, revision-locked plan in the active document.</p>
+      </header>
+
+      <section id="pair-section" class="card">
+        <h2>Pair local adapter</h2>
+        <p>Run <code>adapter.py extension-pair</code>, then enter its one-time code.</p>
+        <label for="port">Bridge port</label>
+        <input id="port" type="number" min="1" max="65535" value="17843" inputmode="numeric">
+        <label for="pairing-code">Pairing code</label>
+        <input id="pairing-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="00000000">
+        <button id="pair">Pair</button>
+      </section>
+
+      <section id="job-section" class="card" hidden>
+        <div class="status-row">
+          <span class="dot" aria-hidden="true"></span>
+          <span>Paired to local adapter</span>
+        </div>
+        <button id="check" class="secondary">Check for approved edit</button>
+        <div id="job" hidden>
+          <dl>
+            <div><dt>Approved plan</dt><dd id="plan-hash"></dd></div>
+            <div><dt>Exact replacements</dt><dd id="edit-count"></dd></div>
+          </dl>
+          <p class="warning">Keep the exact approved Google Doc active. Chrome will show that this extension is debugging the tab while it applies suggestions.</p>
+          <button id="apply">Apply as suggestions</button>
+        </div>
+      </section>
+
+      <p id="status" role="status" aria-live="polite"></p>
+      <p class="privacy">Document text is held only in memory for the active job. The extension stores only the local pairing token and port.</p>
+    </main>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

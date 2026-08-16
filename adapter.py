@@ -15,7 +15,11 @@ from google_docs_adapter.auth import (
     install_client_config,
 )
 from google_docs_adapter.auth_web import authorize_web
-from google_docs_adapter.browser import BrowserSuggestionDriver, browser_profile_path
+from google_docs_adapter.extension_bridge import (
+    create_pairing_server,
+    extension_root,
+    wait_for_pairing,
+)
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import load_json, write_private_json
 
@@ -47,18 +51,10 @@ def main() -> int:
         action="store_true",
         help="Print the local setup URL without opening the default browser",
     )
-    browser_auth_parser = subparsers.add_parser("browser-auth")
-    browser_auth_parser.add_argument(
-        "--document",
-        required=True,
-        help="Google Docs URL, google-docs resource, or document ID to open",
-    )
-    browser_auth_parser.add_argument(
-        "--profile-dir",
-        default=str(browser_profile_path()),
-        help="Dedicated Chrome user-data directory (must remain outside this repository)",
-    )
-    browser_auth_parser.add_argument("--timeout", type=int, default=900)
+    subparsers.add_parser("extension-path")
+    extension_pair_parser = subparsers.add_parser("extension-pair")
+    extension_pair_parser.add_argument("--timeout", type=int, default=600)
+    extension_pair_parser.add_argument("--port", type=int)
     args = parser.parse_args()
 
     if args.command == "describe":
@@ -100,18 +96,19 @@ def main() -> int:
         for document_id in picked_file_ids:
             print(f"Authorized resource: google-docs:{document_id}")
         return 0
-    if args.command == "browser-auth":
+    if args.command == "extension-path":
+        print(extension_root())
+        return 0
+    if args.command == "extension-pair":
         try:
-            document_id = document_id_from_reference(args.document)
-            profile_dir = Path(args.profile_dir).expanduser().resolve(strict=False)
-            BrowserSuggestionDriver(profile_dir, timeout_seconds=90).authenticate(
-                document_id,
-                timeout_seconds=args.timeout,
-            )
+            server, state = create_pairing_server(port=args.port)
+            print(f"Extension bridge listening on 127.0.0.1:{server.server_port}.", flush=True)
+            print(f"Enter pairing code {state.pairing_code} in the extension side panel.", flush=True)
+            wait_for_pairing(server, state, args.timeout)
         except (OSError, RuntimeError, ValueError) as exc:
-            print(f"Browser authorization failed: {exc}", file=sys.stderr)
+            print(f"Extension pairing failed: {exc}", file=sys.stderr)
             return 2
-        print("Dedicated Google Docs browser profile is authenticated and editor-ready.")
+        print("Chrome extension paired. The pairing token is stored outside the repository.")
         return 0
 
     request = load_json(Path(args.request).resolve(strict=True), "adapter request")

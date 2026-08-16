@@ -11,7 +11,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 from google_docs_adapter.auth import (
@@ -22,8 +21,15 @@ from google_docs_adapter.auth import (
     install_client_config,
 )
 from google_docs_adapter.auth_web import create_local_auth_server
-from google_docs_adapter.browser import BrowserSuggestionDriver, browser_profile_path, document_url
 from google_docs_adapter.document import tab_text_indexes
+from google_docs_adapter.extension_bridge import (
+    BRIDGE_PROTOCOL,
+    PAIRING_SCHEMA,
+    ExtensionSuggestionDriver,
+    create_pairing_server,
+    extension_root,
+    wait_for_pairing,
+)
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import sha256_file, write_private_json
 
@@ -100,7 +106,7 @@ class FakeClient:
         }
 
 
-class FakeBrowser:
+class FakeExtension:
     def __init__(self, client: FakeClient) -> None:
         self.client = client
         self.calls: list[tuple[str, list[dict]]] = []
@@ -110,7 +116,7 @@ class FakeBrowser:
         before_mutation()
         self.client.applied = True
         return {
-            "transport": "browser-suggesting-ui",
+            "transport": "chrome-extension-suggesting-ui",
             "mode_verified": True,
             "edit_count": len(edits),
         }
@@ -286,143 +292,128 @@ class AdapterTests(unittest.TestCase):
         index = tab_text_indexes(value)["tab-1"]
         self.assertEqual(index.locate("🌎")[2:], (3, 5))
 
-    def test_browser_profile_is_external_and_document_url_preserves_tab(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            state = Path(temporary) / "state"
-            with mock.patch.dict(
-                os.environ,
-                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(state)},
-                clear=False,
-            ):
-                self.assertEqual(
-                    browser_profile_path(),
-                    state.resolve(strict=False) / "browser-profile",
-                )
+    def test_extension_manifest_is_tool_code_with_narrow_hosts(self) -> None:
+        manifest = json.loads((extension_root() / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["manifest_version"], 3)
+        self.assertIn("debugger", manifest["permissions"])
         self.assertEqual(
-            document_url("SyntheticDocument123", "t.0"),
-            "https://docs.google.com/document/d/SyntheticDocument123/edit?tab=t.0",
+            manifest["host_permissions"],
+            ["http://127.0.0.1/*", "https://docs.google.com/*"],
         )
+        self.assertNotIn("<all_urls>", json.dumps(manifest))
 
-    def test_browser_launch_failure_stops_playwright_without_masking_error(self) -> None:
-        fake_chromium = mock.Mock()
-        fake_chromium.launch_persistent_context.side_effect = RuntimeError(
-            "synthetic browser launch failure"
-        )
-        fake_playwright = SimpleNamespace(chromium=fake_chromium, stop=mock.Mock())
-        fake_manager = SimpleNamespace(start=mock.Mock(return_value=fake_playwright))
-
-        with mock.patch(
-            "playwright.sync_api.sync_playwright", return_value=fake_manager
-        ):
-            driver = BrowserSuggestionDriver(Path("/tmp/synthetic-browser-profile"))
-            with self.assertRaisesRegex(
-                RuntimeError, "synthetic browser launch failure"
-            ):
-                with driver._context():
-                    self.fail("launch failure must not yield a browser context")
-
-        fake_playwright.stop.assert_called_once_with()
-
-    def test_browser_auth_uses_normal_chrome_before_playwright_verification(self) -> None:
-        process = mock.Mock()
-        process.wait.return_value = 0
-        driver = BrowserSuggestionDriver(Path("/tmp/synthetic-browser-profile"))
-
-        with (
-            mock.patch.dict(os.environ, {}, clear=True),
-            mock.patch.object(
-                driver,
-                "_chrome_executable",
-                return_value=Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-            ),
-            mock.patch("google_docs_adapter.browser.subprocess.Popen", return_value=process) as popen,
-        ):
-            driver._human_authenticate("SyntheticDocument123", timeout_seconds=120)
-
-        command = popen.call_args.args[0]
-        self.assertIn(f"--user-data-dir={driver.profile_dir}", command)
-        self.assertIn("--password-store=basic", command)
-        self.assertIn("--use-mock-keychain", command)
-        self.assertNotIn("--enable-automation", command)
-        self.assertNotIn("--remote-debugging-pipe", command)
-        self.assertNotIn("--no-sandbox", command)
-        self.assertEqual(command[-1], document_url("SyntheticDocument123"))
-        process.wait.assert_called_once_with(timeout=120)
-
-    def test_browser_auth_disables_only_nested_chrome_sandbox_under_nono(self) -> None:
-        process = mock.Mock()
-        process.wait.return_value = 0
-        driver = BrowserSuggestionDriver(Path("/tmp/synthetic-browser-profile"))
-
-        with (
-            mock.patch.dict(
-                os.environ,
-                {"NONO_ACTIVE_PROFILE": "custom-codex-google-docs"},
-                clear=True,
-            ),
-            mock.patch.object(
-                driver,
-                "_chrome_executable",
-                return_value=Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-            ),
-            mock.patch("google_docs_adapter.browser.subprocess.Popen", return_value=process) as popen,
-        ):
-            driver._human_authenticate("SyntheticDocument123", timeout_seconds=120)
-
-        command = popen.call_args.args[0]
-        self.assertIn("--no-sandbox", command)
-        self.assertNotIn("--enable-automation", command)
-        self.assertNotIn("--remote-debugging-pipe", command)
-
-    def test_browser_replace_confirms_exact_match_before_mutation(self) -> None:
-        driver = BrowserSuggestionDriver(Path("/synthetic/browser-profile"))
-        page = mock.MagicMock()
-        dialog = mock.MagicMock()
-        find_input = mock.MagicMock()
-        replace_input = mock.MagicMock()
-        match_case = mock.MagicMock()
-        option = mock.MagicMock()
-        replace_button = mock.MagicMock()
-        find_input.count.return_value = 1
-        replace_input.count.return_value = 1
-        match_case.first.is_checked.return_value = False
-        option.first.is_checked.return_value = False
-        dialog.inner_text.return_value = "Find and replace\n1 of 1\nReplace"
-
-        def locate(selector: str) -> object:
-            return {
-                "input.docs-findandreplacedialog-find-input": find_input,
-                "input.docs-findandreplacedialog-replace-input": replace_input,
-                ".docs-findandreplacedialog-replace-button": replace_button,
-            }[selector]
-
-        def by_role(role: str, name: object = None) -> object:
-            if role == "checkbox" and "Match case" in str(name):
-                return match_case
-            if role == "checkbox":
-                return option
-            if role == "button":
-                return replace_button
-            raise AssertionError(role)
-
-        dialog.locator.side_effect = locate
-        dialog.get_by_role.side_effect = by_role
-        before_click = mock.Mock()
-        with mock.patch.object(driver, "_open_find_replace", return_value=dialog), mock.patch.object(
-            driver,
-            "_visible",
-            side_effect=lambda locator: locator in {match_case, replace_button},
-        ):
-            driver._replace_unique(
-                page,
-                {"find": "Synthetic old", "replace": "Synthetic new"},
-                before_click,
+    def test_extension_pairing_requires_chrome_origin_and_writes_private_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "pairing.json"
+            server, state = create_pairing_server(
+                state_path,
+                port=0,
+                pairing_code="12345678",
             )
-        match_case.first.check.assert_called_once_with()
-        find_input.fill.assert_called_once_with("Synthetic old")
-        replace_input.fill.assert_called_once_with("Synthetic new")
-        before_click.assert_called_once_with()
-        replace_button.first.click.assert_called_once_with()
+            thread = threading.Thread(
+                target=wait_for_pairing,
+                args=(server, state, 5),
+                daemon=True,
+            )
+            thread.start()
+            payload = json.dumps({"pairing_code": "12345678"}).encode("utf-8")
+            bad = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/v1/pair",
+                data=payload,
+                headers={"Content-Type": "application/json", "Origin": "https://example.test"},
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                urllib.request.urlopen(bad, timeout=5)
+            self.assertEqual(rejected.exception.code, 403)
+            origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/v1/pair",
+                data=payload,
+                headers={"Content-Type": "application/json", "Origin": origin},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                paired = json.loads(response.read())
+            thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(paired["protocol"], BRIDGE_PROTOCOL)
+            self.assertTrue(paired["paired"])
+            pairing = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(pairing["schema"], PAIRING_SCHEMA)
+            self.assertEqual(pairing["extension_origin"], origin)
+            self.assertEqual(pairing["token"], paired["token"])
+            if os.name == "posix":
+                self.assertEqual(state_path.stat().st_mode & 0o077, 0)
+
+    def test_extension_bridge_authorizes_boundary_and_returns_content_free_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "pairing.json"
+            origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+            token = "synthetic-extension-token-that-is-long-enough"
+            write_private_json(state_path, {
+                "schema": PAIRING_SCHEMA,
+                "extension_origin": origin,
+                "token": token,
+            })
+            before_mutation = mock.Mock()
+            extension_error: list[Exception] = []
+
+            def ready(base_url: str) -> None:
+                def emulate_extension() -> None:
+                    try:
+                        headers = {"Origin": origin, "Authorization": f"Bearer {token}"}
+                        job_request = urllib.request.Request(base_url + "/v1/job", headers=headers)
+                        with urllib.request.urlopen(job_request, timeout=5) as response:
+                            job = json.loads(response.read())
+                        self.assertEqual(job["protocol"], BRIDGE_PROTOCOL)
+                        boundary_request = urllib.request.Request(
+                            base_url + "/v1/before-mutation",
+                            data=json.dumps({"job_id": job["job_id"]}).encode("utf-8"),
+                            headers={**headers, "Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(boundary_request, timeout=5) as response:
+                            self.assertTrue(json.loads(response.read())["mutation_authorized"])
+                        result_request = urllib.request.Request(
+                            base_url + "/v1/result",
+                            data=json.dumps({
+                                "job_id": job["job_id"],
+                                "status": "ok",
+                                "mode_verified": True,
+                                "edit_count": len(job["edits"]),
+                                "mutation_started": True,
+                            }).encode("utf-8"),
+                            headers={**headers, "Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(result_request, timeout=5):
+                            pass
+                    except Exception as exc:  # pragma: no cover - surfaced below
+                        extension_error.append(exc)
+
+                threading.Thread(target=emulate_extension, daemon=True).start()
+
+            driver = ExtensionSuggestionDriver(
+                "a" * 64,
+                timeout_seconds=10,
+                port=0,
+                state_path=state_path,
+                ready=ready,
+            )
+            result = driver.apply(
+                "SyntheticDocument123",
+                [{"tab_id": "tab-1", "find": "old", "replace": "new"}],
+                before_mutation,
+            )
+            self.assertEqual(extension_error, [])
+            before_mutation.assert_called_once_with()
+            self.assertEqual(result, {
+                "transport": "chrome-extension-suggesting-ui",
+                "mode_verified": True,
+                "edit_count": 1,
+            })
+            self.assertNotIn("old", json.dumps(result))
 
     def test_apply_request_helper_runs_from_outside_repository(self) -> None:
         repository = Path(__file__).resolve().parents[1]
@@ -432,8 +423,8 @@ class AdapterTests(unittest.TestCase):
             plan = root / "plan.json"
             request = root / "input" / "apply.json"
             write_private_json(plan, {
-                "schema": "google-docs-suggestion-plan/v2",
-                "write_transport": "browser-suggesting-ui",
+                "schema": "google-docs-suggestion-plan/v3",
+                "write_transport": "chrome-extension-suggesting-ui",
                 "document_resource": RESOURCE,
                 "revision_id": "synthetic-revision",
             })
@@ -468,7 +459,7 @@ class AdapterTests(unittest.TestCase):
                 "edits": [{"tab_id": "tab-1", "find": "beta", "replace": "delta"}],
             })
             client = FakeClient()
-            browser = FakeBrowser(client)
+            extension = FakeExtension(client)
             plan_response = execute({
                 "operation": "plan",
                 "arguments": {"document_resource": RESOURCE, "edit_spec": str(edit_spec)},
@@ -493,20 +484,20 @@ class AdapterTests(unittest.TestCase):
                 },
             }
             with mock.patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(state)}):
-                apply_response = execute(apply_request, client, browser)
-                replay_response = execute(apply_request, client, browser)
+                apply_response = execute(apply_request, client, extension)
+                replay_response = execute(apply_request, client, extension)
             self.assertEqual(apply_response["status"], "ok")
             self.assertEqual(replay_response, apply_response)
             self.assertEqual(client.batch_calls, [])
-            self.assertEqual(len(browser.calls), 1)
+            self.assertEqual(len(extension.calls), 1)
             receipt = apply_response["remote_receipt"]
             self.assertEqual(receipt["status"], "verified")
             self.assertEqual(receipt["verification"]["suggestion_count"], 2)
             self.assertEqual(
                 receipt["verification"]["write_transport"],
-                "browser-suggesting-ui",
+                "chrome-extension-suggesting-ui",
             )
-            self.assertTrue(receipt["verification"]["browser_mode_verified"])
+            self.assertTrue(receipt["verification"]["extension_mode_verified"])
             receipt_path = output / "receipt.json"
             write_private_json(receipt_path, apply_response)
             verify_response = execute({
@@ -517,8 +508,8 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(verify_response["status"], "ok")
             self.assertTrue(verify_response["summary"]["verified"])
 
-    def test_browser_failure_before_mutation_can_retry(self) -> None:
-        class UnauthenticatedBrowser:
+    def test_extension_failure_before_mutation_can_retry(self) -> None:
+        class UnavailableExtension:
             def apply(self, _document_id: str, _edits: list[dict], _before_mutation: object) -> dict:
                 raise RuntimeError("editor did not become ready; no edit was sent")
 
@@ -547,8 +538,8 @@ class AdapterTests(unittest.TestCase):
                 },
             }
             with mock.patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")}):
-                response = execute(request, client, UnauthenticatedBrowser())
-                retry = execute(request, client, FakeBrowser(client))
+                response = execute(request, client, UnavailableExtension())
+                retry = execute(request, client, FakeExtension(client))
             self.assertEqual(response["status"], "error")
             self.assertIn("did not become ready", response["errors"][0])
             self.assertIn("no edit was sent", response["errors"][0])
@@ -575,7 +566,7 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(response["status"], "error")
             self.assertIn("no unresolved existing suggestions", response["errors"][0])
 
-    def test_pending_partial_browser_write_refuses_duplicate_retry(self) -> None:
+    def test_pending_partial_extension_write_refuses_duplicate_retry(self) -> None:
         class PartialClient(FakeClient):
             def __init__(self) -> None:
                 super().__init__()
@@ -599,7 +590,7 @@ class AdapterTests(unittest.TestCase):
                     ["partial-suggestion"],
                 )
 
-        class PartialBrowser:
+        class PartialExtension:
             def __init__(self, client: PartialClient) -> None:
                 self.client = client
                 self.calls = 0
@@ -608,7 +599,7 @@ class AdapterTests(unittest.TestCase):
                 self.calls += 1
                 before_mutation()
                 self.client.partial = True
-                raise RuntimeError("synthetic browser interrupted after first suggestion")
+                raise RuntimeError("synthetic extension interrupted after first suggestion")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -618,7 +609,7 @@ class AdapterTests(unittest.TestCase):
                 "edits": [{"tab_id": "tab-1", "find": "beta", "replace": "delta"}],
             })
             client = PartialClient()
-            browser = PartialBrowser(client)
+            extension = PartialExtension(client)
             plan_response = execute({
                 "operation": "plan",
                 "arguments": {"document_resource": RESOURCE, "edit_spec": str(spec)},
@@ -636,13 +627,13 @@ class AdapterTests(unittest.TestCase):
                 },
             }
             with mock.patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")}):
-                response = execute(request, client, browser)
-                replay = execute(request, client, browser)
+                response = execute(request, client, extension)
+                replay = execute(request, client, extension)
             self.assertEqual(response["status"], "error")
             self.assertIn("interrupted", response["errors"][0])
             self.assertEqual(replay["status"], "error")
             self.assertIn("pending or partial", replay["errors"][0])
-            self.assertEqual(browser.calls, 1)
+            self.assertEqual(extension.calls, 1)
 
 
 if __name__ == "__main__":

@@ -94,7 +94,7 @@ class ApiHandler(http.server.BaseHTTPRequestHandler):
 
 
 class ControlPlaneIntegrationTests(unittest.TestCase):
-    def test_real_cli_registration_and_browser_plan(self) -> None:
+    def test_real_cli_registration_and_extension_plan(self) -> None:
         cli_raw = os.environ.get("LLM_WIKI_CLI")
         if not cli_raw:
             self.skipTest("LLM_WIKI_CLI is not set")
@@ -185,8 +185,11 @@ class ControlPlaneIntegrationTests(unittest.TestCase):
                 self.assertTrue(plan_run["summary"]["tracked_changes"])
                 plan = outputs / "plan" / "plan.json"
                 plan_value = json.loads(plan.read_text())
-                self.assertEqual(plan_value["schema"], "google-docs-suggestion-plan/v2")
-                self.assertEqual(plan_value["write_transport"], "browser-suggesting-ui")
+                self.assertEqual(plan_value["schema"], "google-docs-suggestion-plan/v3")
+                self.assertEqual(
+                    plan_value["write_transport"],
+                    "chrome-extension-suggesting-ui",
+                )
                 self.assertEqual(plan_run["summary"]["plan_sha256"], sha256_file(plan))
                 self.assertEqual(ApiHandler.post_count, 0)
         finally:

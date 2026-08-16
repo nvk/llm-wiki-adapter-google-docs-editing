@@ -1,144 +1,123 @@
 # Google Docs Editing Adapter
 
 Private, content-free llm-wiki tool for planning exact Google Docs edits,
-applying them as tracked suggestions, and verifying those suggestions by reading
-the document back in accepted and rejected projection modes.
+applying them as tracked suggestions through a normal-Chrome extension, and
+verifying the suggestions through Google Docs API read-back.
 
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.5.0`
+- Version: `0.6.0`
 
-The repository never stores document content, document identifiers, OAuth
-credentials, tokens, plans, responses, journals, or receipts. All of those are
-runtime material in operator-selected external directories.
+The repository contains tools only. Document text, identifiers, OAuth
+credentials, pairing tokens, plans, receipts, and journals remain in external
+runtime directories.
+
+## Why an extension
+
+Google rejects automated browser sign-in, while a second Chrome instance can
+also conflict with an outer OS sandbox. v0.6 does not launch or sign in to
+Chrome. Its Manifest V3 extension runs in the user's existing normal Chrome
+profile and acts only after the user opens its side panel and presses **Apply
+as suggestions**.
+
+The extension uses Chrome's side-panel API for approval and the debugger API
+for trusted mouse and keyboard input in the active Google Docs tab. It has no
+`<all_urls>` permission. Persistent host access is limited to
+`docs.google.com` and the loopback bridge at `127.0.0.1`.
 
 ## Tracked-changes guarantee
 
 Every successful `apply`:
 
 1. is bound to the SHA-256 of the exact plan file;
-2. requires an explicit llm-wiki `--approve-remote-write` flag;
-3. confirms the exact Docs API revision and both baseline projections before
-   opening the editor;
-4. opens an isolated, adapter-only Chrome profile, never the user's normal
-   Chrome profile;
-5. proves the normal Google Docs UI is in **Suggesting** mode before the first
-   replacement and again after every replacement;
-6. records a private pending journal immediately before the first UI mutation;
-7. discovers the created suggestion IDs through Docs API read-back;
-8. confirms those IDs exist in the inline projection;
-9. confirms the rejected projection equals the pre-write document; and
-10. confirms the accepted projection equals the approved replacement plan.
+2. requires llm-wiki's explicit `--approve-remote-write` hash;
+3. confirms the planned Docs revision and accepted/rejected projections;
+4. sends one in-memory job over a paired, bearer-authenticated loopback bridge;
+5. requires a second explicit click in the extension side panel;
+6. requires the exact approved document to be the active tab;
+7. proves **Suggesting** mode before the first replacement and after each one;
+8. records a private pending journal immediately before the first UI mutation;
+9. discovers new suggestion IDs through Docs API read-back; and
+10. proves the rejected projection is unchanged and the accepted projection
+    equals the approved replacement plan.
 
-Any failed condition returns an error. A caller-stable idempotency key is
-journaled outside the repository so retrying a successful operation cannot
-create the suggestions twice.
+UI completion alone is never success. A failed or partial write remains
+pending so retry cannot silently duplicate suggestions.
 
-The adapter no longer uses the Developer Preview suggestion-writing API. The
-Docs API remains the revision-locked planning and verification channel; the
-ordinary Google Docs browser UI is the write channel. This works with consumer
-Google accounts that can use Suggesting in the document UI.
-
-## Google prerequisite
+## Google API authorization
 
 Enable the Google Docs API, Google Drive API, and Google Picker API, then create
-an OAuth **Desktop app** client. The API authorization requests only
-`https://www.googleapis.com/auth/drive.file`. No Google Workspace subscription
-or Developer Preview enrollment is required for browser-backed suggestions.
-
-Google does not permit OAuth clients to be created or modified
-programmatically. Creating the application identity in Google Cloud Console is
-a one-time adapter-owner responsibility, not an end-user authorization step.
-The downloaded client configuration is installed outside the repository. Users
-then see only a **Connect with Google** button, Google consent, and Picker.
-
-## Install and authenticate
-
-Install the Python dependency into the private adapter environment. Playwright
-uses the installed Google Chrome application; do not install or reuse a normal
-Chrome user-data directory:
+an OAuth **Desktop app** client. The adapter requests only
+`https://www.googleapis.com/auth/drive.file`. No Workspace subscription or
+Developer Preview enrollment is required.
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python adapter.py configure-oauth \
   --client-secrets /absolute/private/downloaded-desktop-client.json
 .venv/bin/python adapter.py auth \
   --document 'https://docs.google.com/document/d/<document-id>/edit'
 ```
 
-`configure-oauth` is the one-time owner provisioning command. It validates and
-copies only the required Desktop client fields to the private mode-0600 profile
-at `~/.config/llm-wiki/google-docs-editing/oauth-client.json`. The original
-download remains external and can be removed after secure backup. Never commit
-either file.
+`configure-oauth` validates and installs the owner-provisioned Desktop client
+outside the repository. `auth` opens a local **Connect with Google** page, uses
+PKCE and Google Picker, and stores the resulting token separately with mode
+`0600`.
 
-The normal `auth` command opens a one-click local page on a random `127.0.0.1`
-port. It never asks the user for a credential file. **Connect with Google**
-continues to Google's consent screen and Picker. The optional `--document`
-value pins Picker to that exact document. The flow uses PKCE, a per-run OAuth
-state, and only the `drive.file` scope; it filters to native Google Docs and
-prints the selected exact `google-docs:<document-id>` resource.
+## Install and pair the Chrome extension
 
-The user token is stored separately at
-`~/.config/llm-wiki/google-docs-editing/token.json` with mode `0600`; it does
-not duplicate the managed client secret. Override the managed profile with
-`GOOGLE_OAUTH_CLIENT_FILE` and the token with `GOOGLE_OAUTH_TOKEN_FILE` when
-needed. Keep all credential material outside this repository.
-Run `auth` again to grant the same OAuth client access to another document;
-previously selected file IDs remain recorded in the private token metadata.
+1. In normal Chrome, open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked** and select the path printed by:
 
-There is a second, one-time authorization for the browser write channel. Start
-Codex with the tracked `codex-google-docs` dotfiles profile, then run:
+   ```bash
+   .venv/bin/python adapter.py extension-path
+   ```
 
-```bash
-.venv/bin/python adapter.py browser-auth \
-  --document 'https://docs.google.com/document/d/<document-id>/edit'
-```
+4. Click the extension icon to open its side panel.
+5. Start the one-time local pairing server:
 
-Chrome opens with a dedicated user-data directory. Sign in to Google in that
-window. The command succeeds only after the exact document editor and its mode
-selector are ready. The dedicated profile defaults to `browser-profile/`
-inside `LLM_WIKI_GOOGLE_DOCS_STATE_DIR`; it is runtime data and must never be
-placed in this repository.
+   ```bash
+   .venv/bin/python adapter.py extension-pair
+   ```
 
-The default idempotency journal is
-`~/.local/state/llm-wiki/google-docs-editing`. Optional path overrides belong in
-the launcher environment, not in the repository or adapter registry:
+6. Enter the printed eight-digit code in the side panel and click **Pair**.
 
-```bash
-export GOOGLE_OAUTH_TOKEN_FILE=/absolute/private/google-docs-token.json
-export GOOGLE_OAUTH_CLIENT_FILE=/absolute/private/google-docs-oauth-client.json
-export LLM_WIKI_GOOGLE_DOCS_STATE_DIR=/absolute/private/google-docs-state
-export LLM_WIKI_GOOGLE_DOCS_BROWSER_PROFILE_DIR=/absolute/private/google-docs-browser
-```
+Pairing binds a random bearer token to that extension's exact
+`chrome-extension://` origin. Chrome stores the token in extension-local
+storage; the adapter stores it in the external state directory with mode
+`0600`. Pairing and edit servers bind only to `127.0.0.1`.
 
-When using any override, add its name with `adapter add --env <NAME>` so the
-sanitized llm-wiki launcher passes it through.
+The default bridge port is `17843`. Override both pairing and apply with
+`LLM_WIKI_GOOGLE_DOCS_EXTENSION_PORT`, and enter the same port in the side
+panel. The default state root is
+`~/.local/state/llm-wiki/google-docs-editing`; override it with
+`LLM_WIKI_GOOGLE_DOCS_STATE_DIR`. Any override used through llm-wiki must be
+allowlisted with `adapter add --env`.
 
-## Register one document
+## Register exact documents
 
-Use llm-wiki v0.20.0 or newer. Replace the placeholder with the exact document
-ID from its Google Docs URL:
+Use llm-wiki v0.20.0 or newer:
 
 ```bash
 /path/to/llm-wiki adapter add "$PWD" \
   --read-root /absolute/private/google-docs-input \
   --read-root /absolute/private/google-docs-output \
   --write-root /absolute/private/google-docs-output \
-  --remote-resource 'google-docs:<document-id>'
+  --remote-resource 'google-docs:<document-id>' \
+  --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR \
+  --env LLM_WIKI_GOOGLE_DOCS_EXTENSION_PORT
 /path/to/llm-wiki adapter doctor google-docs-editing --json
 ```
 
-Register additional documents explicitly by repeating `--remote-resource` and
-then `adapter add --replace`. Normal `adapter list` output reports a count rather
-than document IDs.
+Each additional document requires another exact registered remote resource.
+Normal adapter listings report only the count.
 
-## Plan an exact replacement
+## Plan, approve, and apply
 
-Place this edit specification in the registered external read root:
+Create an edit spec under a registered external read root:
 
 ```json
 {
@@ -153,21 +132,10 @@ Place this edit specification in the registered external read root:
 }
 ```
 
-`tab_id` can be omitted only for a single-tab document. Browser plans require
-each `find` value to be unique across the entire document and do not accept `occurrence`.
-v0.5 also refuses to plan while the document has any unresolved suggestions;
-this keeps UI Find-and-replace deterministic and prevents interaction with
-someone else's pending changes.
+`tab_id` is optional only for a single-tab document. Each `find` must be unique
+across the document. Planning is refused while unresolved suggestions exist.
 
-Run `inspect` first to obtain private tab text and IDs, then run `plan`. Both
-operations are remote reads and produce only private artifacts in the external
-output root. A plan records resolved document indices, accepted/rejected
-projection hashes, the current revision, and its own SHA-256. It contains no
-caller-supplied browser actions or mutating Docs API request body.
-
-## Approve and apply
-
-Build a mode-0600 apply request from the plan:
+After `inspect` and `plan`, build a private apply request:
 
 ```bash
 .venv/bin/python scripts/make_apply_request.py \
@@ -177,8 +145,7 @@ Build a mode-0600 apply request from the plan:
   --request /absolute/private/google-docs-input/apply-001.json
 ```
 
-The helper prints the plan SHA-256. Review the private plan and Google Docs diff,
-then explicitly apply that exact hash:
+Start the exact approved run:
 
 ```bash
 /path/to/llm-wiki adapter run google-docs-editing \
@@ -188,25 +155,30 @@ then explicitly apply that exact hash:
   --json
 ```
 
-Terminal JSON is content-free and identifier-free. The complete receipt stays
-in the private output root with mode `0600`.
+While it waits, open the exact Google Doc in normal Chrome, open the extension
+side panel, choose **Check for approved edit**, compare the displayed hash, and
+choose **Apply as suggestions**. The complete receipt stays private; terminal
+JSON remains content-free and identifier-free.
 
-## Operations
+Changing from v0.5's browser driver to the v0.6 extension changes the plan
+schema and transport. Old `google-docs-suggestion-plan/v2` plans must be
+replanned and explicitly re-approved as v3; their old hashes cannot be reused.
 
-- `self-test`: local UTF-16/indexing invariant check.
+## Operations and limits
+
+- `self-test`: local indexing and transport invariant check.
 - `inspect`: private three-projection document inspection.
-- `plan`: resolve exact replacements and generate a revision-locked plan.
-- `apply`: create and verify Google Docs tracked suggestions.
-- `verify`: check that receipt suggestion IDs and projections still match.
+- `plan`: exact revision-locked replacement plan.
+- `apply`: extension-driven tracked suggestions plus API verification.
+- `verify`: re-check a prior verified receipt.
 
-## Current limits
+v0.6 supports exact unique body-text replacements, including multiple tabs. It
+does not generate arbitrary browser actions, raw Docs `batchUpdate` bodies,
+header/footer edits, named ranges, or tab mutations.
 
-- v0.5 supports exact, unique body-text replacements, including multi-tab
-  documents.
-- The plan is refused when unresolved suggestions already exist.
-- Browser writes are interactive/headful and require the dedicated profile to
-  remain signed in.
-- Header/footer settings, named-range creation, tab changes, and unsupported
-  browser edit types are not generated.
-- The tool never accepts arbitrary browser actions or raw `batchUpdate` JSON
-  from the caller.
+## Primary platform references
+
+- [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
+- [Chrome Debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
+- [Chrome extension cross-origin requests](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
+- [Chrome activeTab permission](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab)

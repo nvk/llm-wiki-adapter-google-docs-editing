@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .browser import BrowserSuggestionDriver
 from .client import GoogleDocsClient
 from .document import (
     apply_text_edits,
@@ -17,6 +16,7 @@ from .document import (
     tab_texts,
     text_hash,
 )
+from .extension_bridge import ExtensionSuggestionDriver
 from .storage import (
     canonical_json_bytes,
     load_json,
@@ -29,7 +29,7 @@ from .storage import (
 INLINE = "SUGGESTIONS_INLINE"
 ACCEPTED = "PREVIEW_SUGGESTIONS_ACCEPTED"
 REJECTED = "PREVIEW_WITHOUT_SUGGESTIONS"
-PLAN_SCHEMA = "google-docs-suggestion-plan/v2"
+PLAN_SCHEMA = "google-docs-suggestion-plan/v3"
 EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
 
 
@@ -131,7 +131,7 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
         raise ValueError("document has no editable body text")
     if collect_suggestion_ids(inline):
         raise ValueError(
-            "browser Suggesting plans require a document with no unresolved existing suggestions"
+            "extension Suggesting plans require a document with no unresolved existing suggestions"
         )
     resolved: list[dict[str, Any]] = []
     document_ranges: list[tuple[str, int, int]] = []
@@ -157,12 +157,12 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
             raise ValueError("edit occurrence must be a positive integer")
         if occurrence is not None:
             raise ValueError(
-                "browser Suggesting plans require unique find text and do not accept occurrence"
+                "extension Suggesting plans require unique find text and do not accept occurrence"
             )
         matches_across_document = sum(index.text.count(find) for index in indexes.values())
         if matches_across_document != 1:
             raise ValueError(
-                "browser Suggesting find text must occur exactly once across the entire document; "
+                "extension Suggesting find text must occur exactly once across the entire document; "
                 f"found {matches_across_document}"
             )
         _flat_start, _flat_end, start, end = indexes[tab_id].locate(find, occurrence)
@@ -185,7 +185,7 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
     accepted_expected, _accepted_ranges = apply_text_edits(accepted_before, normalized_edits)
     plan = {
         "schema": PLAN_SCHEMA,
-        "write_transport": "browser-suggesting-ui",
+        "write_transport": "chrome-extension-suggesting-ui",
         "document_resource": resource,
         "revision_id": str(inline["revisionId"]),
         "edit_spec_sha256": sha256_file(edit_spec_path),
@@ -211,7 +211,7 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
         run_id,
         summary={
             "edit_count": len(resolved),
-            "browser_action_count": len(resolved),
+            "extension_action_count": len(resolved),
             "plan_sha256": plan_sha256,
             "expected_revision_sha256": text_hash(str(inline["revisionId"])),
             "tracked_changes": True,
@@ -280,7 +280,7 @@ def _views_match_plan_baseline(plan: dict[str, Any], views: dict[str, dict[str, 
     )
 
 
-def _wait_for_browser_verification(
+def _wait_for_extension_verification(
     client: GoogleDocsClient,
     document_id: str,
     plan: dict[str, Any],
@@ -297,14 +297,14 @@ def _wait_for_browser_verification(
             last_error = exc
             time.sleep(0.5)
     raise RuntimeError(
-        f"browser write was not verified by Google Docs API read-back: {last_error}"
+        f"extension write was not verified by Google Docs API read-back: {last_error}"
     )
 
 
 def apply_suggestions(
     request: dict[str, Any],
     client: GoogleDocsClient,
-    browser: BrowserSuggestionDriver | Any | None = None,
+    extension: ExtensionSuggestionDriver | Any | None = None,
 ) -> dict[str, Any]:
     resource = str(request["arguments"]["document_resource"])
     document_id = document_id_from_resource(resource)
@@ -312,8 +312,8 @@ def apply_suggestions(
     plan = load_json(plan_path, "suggestion plan")
     if plan.get("schema") != PLAN_SCHEMA:
         raise ValueError(f"plan schema must be {PLAN_SCHEMA}")
-    if plan.get("write_transport") != "browser-suggesting-ui":
-        raise ValueError("plan does not authorize the browser Suggesting transport")
+    if plan.get("write_transport") != "chrome-extension-suggesting-ui":
+        raise ValueError("plan does not authorize the Chrome extension Suggesting transport")
     if plan.get("document_resource") != resource:
         raise ValueError("plan document_resource does not match the request")
     remote_write = request.get("remote_write")
@@ -343,7 +343,7 @@ def apply_suggestions(
         except RuntimeError as exc:
             if not _views_match_plan_baseline(plan, views):
                 raise RuntimeError(
-                    "a prior browser write is pending or partial; refusing to create duplicate suggestions"
+                    "a prior extension write is pending or partial; refusing to create duplicate suggestions"
                 ) from exc
         else:
             verification["recovered_from_pending_journal"] = True
@@ -368,7 +368,7 @@ def apply_suggestions(
             verification = _verify_views(plan, views, _new_suggestion_ids(plan, views))
         except RuntimeError as exc:
             raise RuntimeError(
-                "document revision or projections changed after planning; no browser edit was sent"
+                "document revision or projections changed after planning; no extension edit was sent"
             ) from exc
         verification["recovered_after_revision_change"] = True
         response = _successful_apply_response(
@@ -393,7 +393,7 @@ def apply_suggestions(
         boundary_views = _stable_views(client, document_id)
         if not _views_match_plan_baseline(plan, boundary_views):
             raise RuntimeError(
-                "document changed at the governed browser mutation boundary; no edit was sent"
+                "document changed at the governed extension mutation boundary; no edit was sent"
             )
         write_private_json(
             journal_path,
@@ -407,18 +407,27 @@ def apply_suggestions(
         )
         pending_written = True
 
-    browser_result = (browser or BrowserSuggestionDriver()).apply(
+    options = request.get("options")
+    timeout_seconds = 300
+    if isinstance(options, dict) and "extension_timeout_seconds" in options:
+        timeout_seconds = options["extension_timeout_seconds"]
+        if not isinstance(timeout_seconds, int) or not 10 <= timeout_seconds <= 900:
+            raise ValueError("extension_timeout_seconds must be an integer from 10 to 900")
+    extension_result = (
+        extension
+        or ExtensionSuggestionDriver(plan_sha256, timeout_seconds=timeout_seconds)
+    ).apply(
         document_id,
         list(plan["edits"]),
         mark_pending,
     )
     if not pending_written:
-        raise RuntimeError("browser driver returned without crossing the governed mutation boundary")
-    if not isinstance(browser_result, dict) or browser_result.get("mode_verified") is not True:
-        raise RuntimeError("browser driver did not confirm Suggesting mode")
-    views, verification = _wait_for_browser_verification(client, document_id, plan)
-    verification["write_transport"] = "browser-suggesting-ui"
-    verification["browser_mode_verified"] = True
+        raise RuntimeError("extension returned without crossing the governed mutation boundary")
+    if not isinstance(extension_result, dict) or extension_result.get("mode_verified") is not True:
+        raise RuntimeError("extension did not confirm Suggesting mode")
+    views, verification = _wait_for_extension_verification(client, document_id, plan)
+    verification["write_transport"] = "chrome-extension-suggesting-ui"
+    verification["extension_mode_verified"] = True
     response = _successful_apply_response(
         resource, plan_sha256, idempotency_key, expected_revision,
         str(views["inline"]["revisionId"]), verification, run_id,
@@ -531,7 +540,7 @@ def self_test() -> dict[str, Any]:
         summary={
             "utf16_indexes": True,
             "tracked_changes_required": True,
-            "write_transport": "browser-suggesting-ui",
+            "write_transport": "chrome-extension-suggesting-ui",
         },
     )
 
@@ -539,7 +548,7 @@ def self_test() -> dict[str, Any]:
 def execute(
     request: dict[str, Any],
     client: GoogleDocsClient | None = None,
-    browser: BrowserSuggestionDriver | Any | None = None,
+    extension: ExtensionSuggestionDriver | Any | None = None,
 ) -> dict[str, Any]:
     operation = request.get("operation")
     try:
@@ -551,7 +560,7 @@ def execute(
         if operation == "plan":
             return plan_suggestions(request, active_client)
         if operation == "apply":
-            return apply_suggestions(request, active_client, browser)
+            return apply_suggestions(request, active_client, extension)
         if operation == "verify":
             return verify_receipt(request, active_client)
         return _error(str(operation), "unsupported operation")
