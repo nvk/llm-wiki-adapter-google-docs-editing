@@ -119,6 +119,15 @@ function documentIdFromUrl(rawUrl) {
   return match ? decodeURIComponent(match[1]) : "";
 }
 
+function documentTabIdFromUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return url.searchParams.get("tab") || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
 async function activeDocumentTab(documentId) {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0];
@@ -225,7 +234,13 @@ async function clickNamedControl(tabId, role, exactName, rootSelector = "body") 
 
 async function waitForEditor(tabId) {
   await waitFor(
-    async () => Boolean(await evaluate(tabId, `Boolean(document.querySelector("#docs-editor") && document.querySelector("#docs-mode-switcher-select"))`)),
+    async () => Boolean(await evaluate(tabId, `(() => {
+      if (!location.href.startsWith("https://docs.google.com/document/d/")) return false;
+      const mode = document.querySelector("#docs-mode-switcher-select");
+      if (!mode) return false;
+      const rect = mode.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    })()`)),
     "The Google Docs editor did not become ready.",
     30000,
   );
@@ -399,7 +414,8 @@ async function executeJob(job) {
     attached = true;
     await command(tabId, "Runtime.enable");
     await command(tabId, "Page.enable");
-    let currentTab = null;
+    let currentTab = documentTabIdFromUrl(tab.url || "");
+    await waitForEditor(tabId);
     for (const edit of job.edits) {
       if (edit.tab_id !== currentTab) {
         await navigateToTab(tabId, job.document_id, edit.tab_id);

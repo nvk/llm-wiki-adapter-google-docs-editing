@@ -1,7 +1,7 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Private tool for revision-locked Google Docs edits applied and verified as tracked suggestions.",
   "distribution": "private",
   "entrypoint": [".venv/bin/python", "adapter.py"],
