@@ -15,6 +15,8 @@ from typing import Any, BinaryIO
 from .extension_bridge import (
     BRIDGE_PROTOCOL,
     MAX_MESSAGE_BYTES,
+    bridge_state_root,
+    ensure_private_socket_parent,
     extension_root,
     native_socket_path,
 )
@@ -72,12 +74,13 @@ def install_native_host(
     install_dir = (destination or chrome_native_host_dir()).resolve(strict=False)
     install_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     extension_id = extension_id_from_manifest(root / "extension" / "manifest.json")
-    state_root = native_socket_path().parent
+    state_root = bridge_state_root()
     state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         state_root.chmod(0o700)
     except OSError:
         pass
+    ensure_private_socket_parent(native_socket_path())
     wrapper = state_root / "native-host"
     script = (
         "#!/bin/sh\n"
@@ -242,11 +245,7 @@ class NativeRelay:
             ).start()
 
     def run(self) -> None:
-        self.socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        try:
-            self.socket_path.parent.chmod(0o700)
-        except OSError:
-            pass
+        ensure_private_socket_parent(self.socket_path)
         if self.socket_path.exists() or self.socket_path.is_symlink():
             if self.socket_path.is_socket() or self.socket_path.is_symlink():
                 self.socket_path.unlink()

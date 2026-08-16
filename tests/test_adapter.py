@@ -27,6 +27,7 @@ from google_docs_adapter.extension_bridge import (
     BRIDGE_PROTOCOL,
     ExtensionSuggestionDriver,
     extension_root,
+    native_socket_path,
 )
 from google_docs_adapter.native_messaging import (
     NATIVE_HOST_NAME,
@@ -406,6 +407,16 @@ class AdapterTests(unittest.TestCase):
             if os.name == "posix":
                 self.assertEqual(result["manifest_path"].stat().st_mode & 0o077, 0)
                 self.assertEqual(result["wrapper_path"].stat().st_mode & 0o077, 0)
+
+    def test_long_external_state_uses_a_private_short_socket(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / ("long-state-segment-" * 8)
+            with mock.patch.dict(os.environ, {
+                "LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(state),
+            }, clear=False):
+                socket_path = native_socket_path()
+                self.assertLessEqual(len(os.fsencode(str(socket_path))), 90)
+                self.assertEqual(socket_path.parent.parent, Path("/tmp"))
 
     def test_native_extension_bridge_authorizes_boundary_and_returns_content_free_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

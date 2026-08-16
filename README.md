@@ -7,7 +7,7 @@ and verifying those suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.8.2`
+- Version: `0.8.3`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, plans, receipts, journals, and connector messages remain in
@@ -106,8 +106,12 @@ for normal edits.
 
 The default state root is
 `~/.local/state/llm-wiki/google-docs-editing`; override it with
-`LLM_WIKI_GOOGLE_DOCS_STATE_DIR`. A socket-only override is available as
-`LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET` for tests and advanced installations.
+`LLM_WIKI_GOOGLE_DOCS_STATE_DIR`. Unix-domain socket paths have a small platform
+limit, so a long external state path automatically uses a mode-0700,
+user-and-state-specific short directory under `/tmp`; all durable state and the
+native-host wrapper remain in the configured external state root. A socket-only
+override is available as `LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET` for tests and
+advanced installations.
 
 ## Register exact documents
 

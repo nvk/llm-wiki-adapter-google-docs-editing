@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
+import stat
 import time
 from pathlib import Path
 from typing import Any, Callable
 
 BRIDGE_PROTOCOL = "llm-wiki-google-docs-extension/v2"
 MAX_MESSAGE_BYTES = 1_048_576
+SAFE_UNIX_SOCKET_PATH_BYTES = 90
 
 
 class ExtensionBridgeError(RuntimeError):
@@ -30,11 +33,26 @@ def bridge_state_root() -> Path:
 
 def native_socket_path() -> Path:
     override = os.environ.get("LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET")
-    return (
-        Path(override).expanduser().resolve(strict=False)
-        if override
-        else bridge_state_root() / "native-bridge.sock"
-    )
+    if override:
+        return Path(override).expanduser().resolve(strict=False)
+    candidate = bridge_state_root() / "native-bridge.sock"
+    if len(os.fsencode(str(candidate))) <= SAFE_UNIX_SOCKET_PATH_BYTES:
+        return candidate
+    digest = hashlib.sha256(str(candidate).encode("utf-8")).hexdigest()[:12]
+    user_id = getattr(os, "getuid", lambda: 0)()
+    return Path("/tmp") / f"llm-wiki-gdocs-{user_id}-{digest}" / "bridge.sock"
+
+
+def ensure_private_socket_parent(socket_path: Path) -> None:
+    parent = socket_path.parent
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    metadata = parent.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ExtensionBridgeError("native connector socket parent is not a private directory")
+    user_id = getattr(os, "getuid", lambda: metadata.st_uid)()
+    if metadata.st_uid != user_id:
+        raise ExtensionBridgeError("native connector socket parent belongs to another user")
+    parent.chmod(0o700)
 
 
 def _send_line(connection: socket.socket, value: dict[str, Any]) -> None:
