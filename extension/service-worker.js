@@ -356,73 +356,177 @@ async function ensureSuggesting(tabId) {
   );
 }
 
+function findReplaceContextExpression(body) {
+  return `(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+    const label = (element) => normalize([
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-tooltip"),
+      element.getAttribute("placeholder"),
+      element.getAttribute("title"),
+    ].filter(Boolean).join(" "));
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"],.docs-dialog,.modal-dialog'))
+      .filter(visible);
+    const namedDialog = dialogs.find((candidate) => {
+      const name = normalize([candidate.getAttribute("aria-label"), candidate.getAttribute("data-dialog-title")]
+        .filter(Boolean).join(" "));
+      const heading = Array.from(candidate.querySelectorAll('[role="heading"],h1,h2,h3,.docs-dialog-title'))
+        .map((candidateHeading) => normalize(candidateHeading.textContent)).join(" ");
+      return /find( and| &) replace/.test(name) || /find( and| &) replace/.test(heading);
+    }) || null;
+    const inputs = Array.from(document.querySelectorAll('input,[role="textbox"]')).filter(visible);
+    const score = (element, kind) => {
+      const name = label(element);
+      const className = normalize(element.className);
+      if (kind === "find") {
+        return (/find-input/.test(className) ? 100 : 0) + (name === "find" ? 50 : 0);
+      }
+      return (/replace-input/.test(className) ? 100 : 0) + (/^replace( with)?$/.test(name) ? 50 : 0);
+    };
+    const ranked = (kind) => inputs.map((element) => ({ element, score: score(element, kind) }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score);
+    let findInput = ranked("find")[0]?.element || null;
+    let replaceInput = ranked("replace")[0]?.element || null;
+    if (namedDialog && (!findInput || !replaceInput)) {
+      const dialogInputs = inputs.filter((element) => namedDialog.contains(element));
+      findInput = findInput || dialogInputs[0] || null;
+      replaceInput = replaceInput || dialogInputs.find((element) => element !== findInput) || null;
+    }
+    if (!findInput || !replaceInput || findInput === replaceInput) return null;
+    let root = namedDialog && namedDialog.contains(findInput) && namedDialog.contains(replaceInput)
+      ? namedDialog : findInput;
+    while (root && !root.contains(replaceInput)) root = root.parentElement;
+    if (!root) return null;
+    ${body}
+  })()`;
+}
+
+function findReplaceMenuItemExpression() {
+  return `(() => {
+    const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+    const candidates = Array.from(document.querySelectorAll('[role="menuitem"],[role="option"]'));
+    const element = candidates.find((candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      const style = getComputedStyle(candidate);
+      if (rect.width <= 0 || rect.height <= 0 || style.visibility === "hidden" || style.display === "none") return false;
+      const name = normalize([
+        candidate.getAttribute("aria-label"), candidate.getAttribute("data-tooltip"), candidate.textContent,
+      ].filter(Boolean).join(" "));
+      return name === "find and replace" || name.startsWith("find and replace ");
+    });
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`;
+}
+
+async function findReplaceOpen(tabId) {
+  return Boolean(await evaluate(tabId, findReplaceContextExpression("return true;")));
+}
+
+async function dispatchShortcut(tabId, key, code, modifiers) {
+  await command(tabId, "Input.dispatchKeyEvent", {
+    type: "rawKeyDown", key, code, modifiers,
+  });
+  await command(tabId, "Input.dispatchKeyEvent", {
+    type: "keyUp", key, code, modifiers,
+  });
+}
+
 async function openFindReplace(tabId) {
+  if (await findReplaceOpen(tabId)) return;
   await clickSelector(tabId, "#docs-edit-menu");
   try {
+    let menuItem = null;
     await waitFor(
-      async () => Boolean(await evaluate(tabId, visibleElementExpression("#docs-find-and-replace"))),
+      async () => {
+        menuItem = await evaluate(tabId, findReplaceMenuItemExpression());
+        return Boolean(menuItem);
+      },
       "",
       2500,
     );
-    await clickSelector(tabId, "#docs-find-and-replace");
+    await clickPoint(tabId, menuItem);
   } catch (_error) {
-    await command(tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
-    await command(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" });
+    await dispatchShortcut(tabId, "Escape", "Escape", 0);
     const platform = String(await evaluate(tabId, "navigator.platform || ''"));
-    const modifiers = platform.toLowerCase().includes("mac") ? 12 : 10;
-    await command(tabId, "Input.dispatchKeyEvent", {
-      type: "keyDown", key: "H", code: "KeyH", modifiers,
-    });
-    await command(tabId, "Input.dispatchKeyEvent", {
-      type: "keyUp", key: "H", code: "KeyH", modifiers,
-    });
+    const modifiers = platform.toLowerCase().includes("mac") ? 12 : 2;
+    await dispatchShortcut(tabId, "H", "KeyH", modifiers);
   }
   await waitFor(
-    async () => Boolean(await evaluate(tabId, visibleElementExpression(".docs-findandreplacedialog"))),
+    async () => findReplaceOpen(tabId),
     "Google Docs Find and replace did not open.",
   );
 }
 
-async function fillInput(tabId, selector, text) {
-  const focused = await evaluate(tabId, `(() => {
-    const element = document.querySelector(${JSON.stringify(selector)});
-    if (!element) return false;
+async function fillFindReplaceInput(tabId, kind, text) {
+  const field = kind === "find" ? "findInput" : "replaceInput";
+  const focused = await evaluate(tabId, findReplaceContextExpression(`
+    const element = ${field};
     element.focus();
     return true;
-  })()`);
+  `));
   if (!focused) {
     throw new Error("A Google Docs Find and replace input is unavailable.");
   }
   const platform = String(await evaluate(tabId, "navigator.platform || ''"));
   const modifiers = platform.toLowerCase().includes("mac") ? 4 : 2;
-  await command(tabId, "Input.dispatchKeyEvent", {
-    type: "keyDown", key: "a", code: "KeyA", modifiers,
-  });
-  await command(tabId, "Input.dispatchKeyEvent", {
-    type: "keyUp", key: "a", code: "KeyA", modifiers,
-  });
+  await dispatchShortcut(tabId, "a", "KeyA", modifiers);
   await command(tabId, "Input.insertText", { text });
-  const accepted = await evaluate(tabId, `document.querySelector(${JSON.stringify(selector)})?.value === ${JSON.stringify(text)}`);
+  const accepted = await evaluate(tabId, findReplaceContextExpression(`
+    const element = ${field};
+    return (typeof element.value === "string" ? element.value : element.textContent) === ${JSON.stringify(text)};
+  `));
   if (!accepted) {
     throw new Error("Google Docs did not accept an exact replacement field.");
   }
 }
 
 async function checkboxState(tabId, exactName) {
-  return evaluate(tabId, `(() => {
-    const root = document.querySelector(".docs-findandreplacedialog");
-    if (!root) return null;
+  return evaluate(tabId, findReplaceContextExpression(`
     const expected = ${JSON.stringify(exactName.toLowerCase())};
     const candidates = Array.from(root.querySelectorAll('[role="checkbox"],input[type="checkbox"]'));
     const element = candidates.find((candidate) => {
-      const name = [candidate.getAttribute("aria-label"), candidate.textContent].filter(Boolean).join(" ").trim().toLowerCase();
-      const parentName = candidate.parentElement ? candidate.parentElement.innerText.trim().toLowerCase() : "";
-      return name === expected || parentName === expected;
+      const names = [
+        candidate.getAttribute("aria-label"), candidate.textContent,
+        candidate.parentElement?.innerText, candidate.parentElement?.parentElement?.innerText,
+      ].map(normalize);
+      return names.some((name) => name === expected);
     });
     if (!element) return null;
     if (typeof element.checked === "boolean") return element.checked;
     return element.getAttribute("aria-checked") === "true" || /checked/.test(element.className || "");
-  })()`);
+  `));
+}
+
+async function clickFindReplaceControl(tabId, role, exactName) {
+  const point = await evaluate(tabId, findReplaceContextExpression(`
+    const expected = ${JSON.stringify(exactName.toLowerCase())};
+    const selector = ${JSON.stringify(`[role="${role}"],${role === "button" ? "button" : "input[type=checkbox]"}`)};
+    const candidates = Array.from(root.querySelectorAll(selector));
+    const element = candidates.find((candidate) => {
+      if (!visible(candidate)) return false;
+      const names = [
+        candidate.getAttribute("aria-label"), candidate.getAttribute("data-tooltip"), candidate.textContent,
+        candidate.parentElement?.innerText, candidate.parentElement?.parentElement?.innerText,
+      ].map(normalize);
+      return names.some((name) => name === expected);
+    });
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  `));
+  if (!point) {
+    throw new Error(`Google Docs ${exactName} control is unavailable.`);
+  }
+  await clickPoint(tabId, point);
 }
 
 async function configureFindOptions(tabId) {
@@ -431,12 +535,12 @@ async function configureFindOptions(tabId) {
     throw new Error("Google Docs Match case control is unavailable.");
   }
   if (!matchCase) {
-    await clickNamedControl(tabId, "checkbox", "Match case", ".docs-findandreplacedialog");
+    await clickFindReplaceControl(tabId, "checkbox", "Match case");
   }
   for (const name of ["Match using regular expressions", "Ignore Latin diacritics"]) {
     const state = await checkboxState(tabId, name);
     if (state === true) {
-      await clickNamedControl(tabId, "checkbox", name, ".docs-findandreplacedialog");
+      await clickFindReplaceControl(tabId, "checkbox", name);
     }
   }
 }
@@ -444,13 +548,12 @@ async function configureFindOptions(tabId) {
 async function replaceUnique(tabId, edit, jobId, firstMutation) {
   await openFindReplace(tabId);
   await configureFindOptions(tabId);
-  await fillInput(tabId, "input.docs-findandreplacedialog-find-input", edit.find);
-  await fillInput(tabId, "input.docs-findandreplacedialog-replace-input", edit.replace);
+  await fillFindReplaceInput(tabId, "find", edit.find);
+  await fillFindReplaceInput(tabId, "replace", edit.replace);
   await waitFor(
-    async () => Boolean(await evaluate(tabId, `(() => {
-      const dialog = document.querySelector(".docs-findandreplacedialog");
-      return dialog ? /\\b1\\s+of\\s+1\\b/i.test(dialog.innerText || dialog.textContent || "") : false;
-    })()`)),
+    async () => Boolean(await evaluate(tabId, findReplaceContextExpression(
+      'return /\\b1\\s+of\\s+1\\b/i.test(root.innerText || root.textContent || "");',
+    ))),
     "Google Docs did not confirm exactly one live match.",
     8000,
   );
@@ -463,10 +566,9 @@ async function replaceUnique(tabId, edit, jobId, firstMutation) {
       throw new Error("The local adapter did not authorize the mutation boundary.");
     }
   }
-  await clickNamedControl(tabId, "button", "Replace", ".docs-findandreplacedialog");
+  await clickFindReplaceControl(tabId, "button", "Replace");
   await sleep(450);
-  await command(tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
-  await command(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" });
+  await dispatchShortcut(tabId, "Escape", "Escape", 0);
 }
 
 async function navigateToTab(tabId, documentId, documentTabId) {

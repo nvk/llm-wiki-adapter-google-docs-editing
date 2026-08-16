@@ -307,8 +307,12 @@ class AdapterTests(unittest.TestCase):
             ["https://docs.google.com/document/*"],
         )
         sidepanel = (extension_root() / "sidepanel.html").read_text(encoding="utf-8")
+        worker = (extension_root() / "service-worker.js").read_text(encoding="utf-8")
         self.assertNotIn("Apply as suggestions", sidepanel)
         self.assertIn("No extension click is required", sidepanel)
+        self.assertIn("findReplaceContextExpression", worker)
+        self.assertIn("findReplaceMenuItemExpression", worker)
+        self.assertNotIn('visibleElementExpression(".docs-findandreplacedialog")', worker)
         self.assertNotIn("<all_urls>", json.dumps(manifest))
 
     def test_extension_pairing_requires_chrome_origin_and_writes_private_state(self) -> None:

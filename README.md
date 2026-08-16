@@ -7,7 +7,7 @@ verifying the suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.7.0`
+- Version: `0.7.1`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, pairing tokens, plans, receipts, and journals remain in external
@@ -161,6 +161,11 @@ extension discovers the approved job and creates the suggestions without a
 second extension interaction. The complete receipt stays private; terminal
 JSON remains content-free and identifier-free.
 
+The extension discovers the current Find-and-replace dialog by semantic field
+and control names rather than depending on one Google Docs CSS class. It falls
+back to Google's documented platform shortcut when the Edit-menu item is not
+available.
+
 Changing from v0.5's browser driver to the v0.6 extension changes the plan
 schema and transport. Old `google-docs-suggestion-plan/v2` plans must be
 replanned and explicitly re-approved as v3; their old hashes cannot be reused.
@@ -184,3 +189,4 @@ header/footer edits, named ranges, or tab mutations.
 - [Chrome Alarms API](https://developer.chrome.com/docs/extensions/reference/api/alarms)
 - [Extension service-worker lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle)
 - [Chrome extension cross-origin requests](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
+- [Google Docs keyboard shortcuts](https://support.google.com/docs/answer/179738)
