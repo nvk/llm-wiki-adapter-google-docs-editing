@@ -15,6 +15,20 @@
     "google-docs-tracked-changes",
     "google-docs-suggestion-verification"
   ],
+  "routes": [
+    {
+      "id": "edit-google-document",
+      "intents": ["edit", "revise", "update", "proofread", "replace", "suggest"],
+      "resource": {
+        "kind": "url",
+        "schemes": ["https"],
+        "hosts": ["docs.google.com"],
+        "path_prefixes": ["/document/d/"]
+      },
+      "guide": "AGENT_WORKFLOW.md",
+      "priority": 100
+    }
+  ],
   "network": "required",
   "writes_wiki": false,
   "operations": {

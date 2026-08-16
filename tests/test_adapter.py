@@ -165,6 +165,24 @@ class FakeExtension:
 
 
 class AdapterTests(unittest.TestCase):
+    def test_manifest_owns_google_docs_route_and_agent_workflow(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        manifest = json.loads(
+            (root / ".llm-wiki-adapter.json").read_text(encoding="utf-8")
+        )
+        self.assertFalse(manifest["writes_wiki"])
+        self.assertEqual(len(manifest["routes"]), 1)
+        route = manifest["routes"][0]
+        self.assertEqual(route["id"], "edit-google-document")
+        self.assertEqual(route["resource"]["hosts"], ["docs.google.com"])
+        self.assertEqual(route["resource"]["path_prefixes"], ["/document/d/"])
+        guide = root / route["guide"]
+        self.assertTrue(guide.is_file())
+        guide_text = guide.read_text(encoding="utf-8")
+        self.assertIn("auth-status", guide_text)
+        self.assertIn("browser-status", guide_text)
+        self.assertIn("`verify` operation", guide_text)
+
     def test_additional_picker_grant_preserves_prior_grants_and_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             token_path = Path(temporary) / "token.json"

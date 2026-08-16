@@ -13,6 +13,18 @@ The repository contains tools only. Document text, identifiers, OAuth
 credentials, plans, receipts, journals, and connector messages remain in
 external runtime storage or memory.
 
+## Self-describing route
+
+The private manifest declares the edit/revise/update/proofread/replace/suggest
+route for `https://docs.google.com/document/d/` resources and points to
+`AGENT_WORKFLOW.md`. A provider-neutral llm-wiki runtime can therefore discover
+this adapter before URL ingestion without embedding Google authentication,
+browser, planning, or recovery instructions in the public plugin.
+
+Route discovery is content-free and does not echo or persist the target URL.
+The adapter guide remains tool documentation; it contains no document content
+or identifiers.
+
 ## Browser-connector design
 
 v0.8 replaces the temporary loopback HTTP server, port, pairing code, bearer
