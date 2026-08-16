@@ -289,7 +289,7 @@ function modeControlExpression() {
         if (!visible(candidate)) return false;
         const role = candidate.getAttribute("role") || "";
         const text = label(candidate);
-        return !["menuitem", "option"].includes(role) &&
+        return !["menuitem", "menuitemradio", "option"].includes(role) &&
           text.length < 120 && /\\b(editing|suggesting|viewing)\\b/.test(text);
       });
       candidates.sort((left, right) => {
@@ -322,11 +322,36 @@ function suggestingOptionExpression() {
     ].filter(Boolean).join(" ").trim().toLowerCase();
     const exact = document.querySelector("#docs-mode-switcher-suggesting");
     const element = visible(exact) ? exact : Array.from(document.querySelectorAll(
-      '[role="menuitem"],[role="option"]'
+      '[role="menuitem"],[role="menuitemradio"],[role="option"],[id*="mode-switcher"]'
     )).find((candidate) => visible(candidate) && /^suggesting\\b/.test(label(candidate)));
     if (!element) return null;
     const rect = element.getBoundingClientRect();
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`;
+}
+
+function suggestingDiagnosticsExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const label = (element) => [
+      element.getAttribute("aria-label"), element.getAttribute("data-tooltip"), element.textContent,
+    ].filter(Boolean).join(" ").trim().toLowerCase();
+    const count = (selector) => Array.from(document.querySelectorAll(selector)).filter(visible).length;
+    const named = Array.from(document.querySelectorAll(
+      '[role="menuitem"],[role="menuitemradio"],[role="option"],[id*="mode-switcher"]'
+    )).filter((candidate) => visible(candidate) && /^suggesting\\b/.test(label(candidate))).length;
+    return {
+      exact: visible(document.querySelector("#docs-mode-switcher-suggesting")),
+      menuitem: count('[role="menuitem"]'),
+      menuitemradio: count('[role="menuitemradio"]'),
+      option: count('[role="option"]'),
+      named,
+    };
   })()`;
 }
 
@@ -348,15 +373,43 @@ async function ensureSuggesting(tabId) {
     throw new Error("The Google Docs editing-mode control is unavailable.");
   }
   if (!mode.text.includes("suggest")) {
+    const platform = String(await evaluate(tabId, "navigator.platform || ''"));
+    const modifiers = platform.toLowerCase().includes("mac") ? 13 : 11;
+    await dispatchShortcut(tabId, "x", "KeyX", modifiers);
+    try {
+      await waitFor(
+        async () => {
+          mode = await modeControl(tabId);
+          return Boolean(mode && mode.text.includes("suggest"));
+        },
+        "",
+        3000,
+      );
+      return;
+    } catch (_error) {
+      // Fall back to the visible mode menu when Docs does not handle the shortcut.
+    }
+    mode = await modeControl(tabId);
+    if (!mode) {
+      throw new Error("The Google Docs editing-mode control is unavailable.");
+    }
     await clickPoint(tabId, mode);
     let option = null;
-    await waitFor(
-      async () => {
-        option = await evaluate(tabId, suggestingOptionExpression());
-        return Boolean(option);
-      },
-      "Suggesting mode is not available for this account or document.",
-    );
+    try {
+      await waitFor(
+        async () => {
+          option = await evaluate(tabId, suggestingOptionExpression());
+          return Boolean(option);
+        },
+        "",
+      );
+    } catch (_error) {
+      const diagnostics = await evaluate(tabId, suggestingDiagnosticsExpression());
+      const suffix = diagnostics
+        ? ` (exact=${diagnostics.exact}; menuitem=${diagnostics.menuitem}; menuitemradio=${diagnostics.menuitemradio}; option=${diagnostics.option}; named=${diagnostics.named})`
+        : "";
+      throw new Error(`Suggesting mode is not available for this account or document.${suffix}`);
+    }
     await clickPoint(tabId, option);
   }
   await waitFor(

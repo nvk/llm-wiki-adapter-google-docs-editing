@@ -7,7 +7,7 @@ verifying the suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.7.2`
+- Version: `0.7.3`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, pairing tokens, plans, receipts, and journals remain in external
@@ -164,7 +164,9 @@ fall back to another window or background tab containing the same document.
 The complete receipt stays private; terminal JSON remains content-free and
 identifier-free.
 
-The extension discovers the current Find-and-replace dialog by semantic field
+The extension first uses Google's documented platform shortcut to enter
+Suggesting mode, then falls back to the semantic mode menu (including radio
+menu items). It discovers the current Find-and-replace dialog by semantic field
 and control names rather than depending on one Google Docs CSS class. It falls
 back to Google's documented platform shortcut when the Edit-menu item is not
 available.
