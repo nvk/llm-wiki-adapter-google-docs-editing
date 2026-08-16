@@ -147,15 +147,18 @@ def authorize(client_secrets: Path, token_path: Path, timeout: int = 300) -> lis
     )
     expires_in = int(token.get("expires_in", 3600))
     prior_file_ids: set[str] = set()
+    prior_refresh_token: str | None = None
     if token_path.is_file():
         prior = load_json(token_path, "existing OAuth token")
         if prior.get("client_id") == config["client_id"]:
+            if isinstance(prior.get("refresh_token"), str):
+                prior_refresh_token = prior["refresh_token"]
             values = prior.get("granted_file_ids", [])
             if isinstance(values, list):
                 prior_file_ids.update(str(value) for value in values if isinstance(value, str))
     stored = {
         "access_token": token["access_token"],
-        "refresh_token": token.get("refresh_token"),
+        "refresh_token": token.get("refresh_token") or prior_refresh_token,
         "expires_at": int(time.time()) + expires_in,
         "scope": token.get("scope", DRIVE_FILE_SCOPE),
         "token_type": token.get("token_type", "Bearer"),
