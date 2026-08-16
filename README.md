@@ -7,7 +7,7 @@ the document back in accepted and rejected projection modes.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.1.0`
+- Version: `0.2.0`
 
 The repository never stores document content, document identifiers, OAuth
 credentials, tokens, plans, responses, journals, or receipts. All of those are
@@ -51,12 +51,29 @@ The runtime has no third-party Python dependencies:
 python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python adapter.py auth \
-  --client-secrets /absolute/private/oauth-client.json
+  --document 'https://docs.google.com/document/d/<document-id>/edit'
 ```
 
-The auth command uses a loopback callback with PKCE and writes the token with
-mode `0600`. It opens Google's desktop Picker, filters to native Google Docs,
-and prints the exact `google-docs:<document-id>` resource selected by the user.
+With no `--client-secrets` argument, the auth command opens a local setup page
+on a random `127.0.0.1` port. Choose the downloaded Google OAuth **Desktop app**
+JSON there, then continue to Google's consent screen and Picker. The optional
+`--document` value pins Picker to that exact document. The local page sends the
+credential only to the loopback process, never stores the original upload, and
+has no third-party scripts or assets. The client credentials needed for refresh
+are retained only inside the private token file.
+
+For scripted setup, bypass the local page and pass the file directly:
+
+```bash
+.venv/bin/python adapter.py auth \
+  --client-secrets /absolute/private/oauth-client.json \
+  --document 'google-docs:<document-id>'
+```
+
+Both auth paths use a random loopback callback, PKCE, a per-run OAuth state,
+and only the `drive.file` scope. They open Google's desktop Picker, filter to
+native Google Docs, and print the exact `google-docs:<document-id>` resource
+selected by the user.
 The default token path is
 `~/.config/llm-wiki/google-docs-editing/token.json`. Override it with `--token`
 or `GOOGLE_OAUTH_TOKEN_FILE` when needed. Keep all credential files outside this
@@ -157,7 +174,7 @@ in the private output root with mode `0600`.
 ## Current limits
 
 - Developer Preview access is mandatory until Google makes suggestion writes GA.
-- v0.1 supports exact body-text replacements, including multi-tab documents.
+- v0.2 supports exact body-text replacements, including multi-tab documents.
 - Targets may not overlap unresolved suggestions; unrelated suggestions are
   preserved.
 - Header/footer settings, named-range creation, tab changes, and unsupported

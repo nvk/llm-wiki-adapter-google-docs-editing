@@ -3,11 +3,20 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from google_docs_adapter.auth import DRIVE_FILE_SCOPE, _authorization_parameters
+from google_docs_adapter.auth import (
+    DRIVE_FILE_SCOPE,
+    _authorization_parameters,
+    document_id_from_reference,
+)
+from google_docs_adapter.auth_web import create_local_auth_server
 from google_docs_adapter.document import tab_text_indexes
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import sha256_file, write_private_json
@@ -85,6 +94,113 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(parameters["trigger_onepick"], "true")
         self.assertEqual(parameters["allow_multiple"], "false")
         self.assertEqual(parameters["mimetypes"], "application/vnd.google-apps.document")
+
+    def test_document_reference_parser_and_picker_pin(self) -> None:
+        document_id = "SyntheticDocument123"
+        self.assertEqual(document_id_from_reference(document_id), document_id)
+        self.assertEqual(document_id_from_reference(f"google-docs:{document_id}"), document_id)
+        self.assertEqual(
+            document_id_from_reference(
+                f"https://docs.google.com/document/d/{document_id}/edit?tab=t.0"
+            ),
+            document_id,
+        )
+        with self.assertRaises(ValueError):
+            document_id_from_reference("https://example.com/not-a-google-doc")
+        parameters = _authorization_parameters(
+            "synthetic-client",
+            "http://127.0.0.1:10000/callback",
+            "verifier",
+            "state",
+            document_id,
+        )
+        self.assertEqual(parameters["file_ids"], document_id)
+
+    def test_local_oauth_page_keeps_upload_local_and_stores_private_token(self) -> None:
+        document_id = "SyntheticDocument123"
+        with tempfile.TemporaryDirectory() as temporary:
+            token_path = Path(temporary) / "token.json"
+            server, state = create_local_auth_server(token_path, 30, document_id)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urllib.request.urlopen(state.base_url + "/", timeout=5) as response:
+                    page = response.read().decode("utf-8")
+                    self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
+                    self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+                self.assertIn("Connect Google Docs", page)
+                self.assertNotIn("synthetic-secret", page)
+
+                payload = json.dumps({
+                    "csrf_token": state.csrf_token,
+                    "client_secrets": {
+                        "installed": {
+                            "client_id": "synthetic-client",
+                            "client_secret": "synthetic-secret",
+                            "token_uri": "https://oauth2.example.test/token",
+                        }
+                    },
+                }).encode("utf-8")
+                bad_request = urllib.request.Request(
+                    state.base_url + "/start",
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Origin": "https://invalid.example",
+                    },
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as rejected:
+                    urllib.request.urlopen(bad_request, timeout=5)
+                self.assertEqual(rejected.exception.code, 403)
+                request = urllib.request.Request(
+                    state.base_url + "/start",
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Origin": state.base_url,
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    start = json.loads(response.read().decode("utf-8"))
+                self.assertNotIn("synthetic-secret", start["authorization_url"])
+                query = urllib.parse.parse_qs(
+                    urllib.parse.urlparse(start["authorization_url"]).query
+                )
+                self.assertEqual(query["file_ids"], [document_id])
+                self.assertEqual(query["scope"], [DRIVE_FILE_SCOPE])
+                self.assertEqual(query["code_challenge_method"], ["S256"])
+                self.assertIsNotNone(state.flow)
+                callback_state = state.flow.state
+                callback = state.base_url + "/callback?" + urllib.parse.urlencode({
+                    "state": callback_state,
+                    "code": "synthetic-code",
+                    "picked_file_ids": document_id,
+                })
+                with mock.patch("google_docs_adapter.auth._post_form", return_value={
+                    "access_token": "synthetic-access",
+                    "refresh_token": "synthetic-refresh",
+                    "expires_in": 3600,
+                    "scope": DRIVE_FILE_SCOPE,
+                    "token_type": "Bearer",
+                }) as post_form:
+                    with urllib.request.urlopen(callback, timeout=5) as response:
+                        result_page = response.read().decode("utf-8")
+                self.assertIn("Google Docs connected", result_page)
+                self.assertTrue(state.event.wait(2))
+                self.assertEqual(state.picked_file_ids, [document_id])
+                self.assertIsNone(state.flow)
+                post_form.assert_called_once()
+                token = json.loads(token_path.read_text(encoding="utf-8"))
+                self.assertEqual(token["granted_file_ids"], [document_id])
+                self.assertEqual(token["client_secret"], "synthetic-secret")
+                if os.name == "posix":
+                    self.assertEqual(token_path.stat().st_mode & 0o077, 0)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
     def test_self_test_and_utf16_indexing(self) -> None:
         response = execute({"operation": "self-test"})

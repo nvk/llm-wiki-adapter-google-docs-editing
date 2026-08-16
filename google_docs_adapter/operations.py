@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .client import GoogleDocsClient, GoogleDocsError
 from .document import (
     apply_text_edits,
@@ -35,7 +36,7 @@ def _response(operation: str, status: str, run_id: str, **values: Any) -> dict[s
     response: dict[str, Any] = {
         "protocol": "llm-wiki-adapter/v1",
         "adapter_id": "google-docs-editing",
-        "adapter_version": "0.1.0",
+        "adapter_version": __version__,
         "operation": operation,
         "status": status,
         "run_id": run_id,

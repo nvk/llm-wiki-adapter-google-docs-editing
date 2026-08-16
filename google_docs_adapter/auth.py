@@ -43,14 +43,30 @@ def _post_form(url: str, fields: dict[str, str]) -> dict[str, Any]:
     return value
 
 
-def _client_config(path: Path) -> dict[str, Any]:
-    root = load_json(path, "OAuth client configuration")
+def _client_config_value(root: dict[str, Any]) -> dict[str, Any]:
     value = root.get("installed")
     if not isinstance(value, dict):
         raise ValueError("OAuth client configuration must contain an installed application")
-    if not value.get("client_id") or not value.get("client_secret"):
+    if not isinstance(value.get("client_id"), str) or not value["client_id"].strip():
+        raise ValueError("OAuth client configuration is missing a client ID")
+    if not isinstance(value.get("client_secret"), str) or not value["client_secret"].strip():
         raise ValueError("OAuth client configuration is missing client credentials")
     return value
+
+
+def _client_config(path: Path) -> dict[str, Any]:
+    return _client_config_value(load_json(path, "OAuth client configuration"))
+
+
+def document_id_from_reference(value: str) -> str:
+    raw = value.strip()
+    if raw.startswith("google-docs:"):
+        raw = raw.removeprefix("google-docs:")
+    elif raw.startswith("https://docs.google.com/document/d/"):
+        raw = raw.removeprefix("https://docs.google.com/document/d/").split("/", 1)[0]
+    if not raw or len(raw) > 256 or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for character in raw):
+        raise ValueError("document must be a Google Docs URL, google-docs resource, or document ID")
+    return raw
 
 
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -84,10 +100,14 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _authorization_parameters(
-    client_id: str, redirect_uri: str, verifier: str, state: str
+    client_id: str,
+    redirect_uri: str,
+    verifier: str,
+    state: str,
+    document_id: str | None = None,
 ) -> dict[str, str]:
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode("ascii")
-    return {
+    parameters = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
@@ -101,45 +121,31 @@ def _authorization_parameters(
         "allow_multiple": "false",
         "mimetypes": "application/vnd.google-apps.document",
     }
+    if document_id:
+        parameters["file_ids"] = document_id
+    return parameters
 
 
-def authorize(client_secrets: Path, token_path: Path, timeout: int = 300) -> list[str]:
-    config = _client_config(client_secrets)
-    verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode("ascii")
-    state = secrets.token_urlsafe(32)
-    _CallbackHandler.result = {}
-    _CallbackHandler.expected_state = state
-    _CallbackHandler.event = threading.Event()
-    server = http.server.HTTPServer(("127.0.0.1", 0), _CallbackHandler)
-    redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
-    parameters = _authorization_parameters(
-        str(config["client_id"]), redirect_uri, verifier, state
-    )
-    url = AUTHORIZATION_ENDPOINT + "?" + urllib.parse.urlencode(parameters)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    print("Open this URL if the browser does not open automatically:")
-    print(url)
-    webbrowser.open(url)
-    if not _CallbackHandler.event.wait(timeout):
-        server.shutdown()
-        raise RuntimeError("OAuth authorization timed out")
-    server.shutdown()
-    result = _CallbackHandler.result
-    if result.get("error") or not result.get("code"):
-        raise RuntimeError(f"OAuth authorization failed: {result.get('error', 'missing code')}")
-    picked_file_ids = [
-        value for value in result.get("picked_file_ids", "").split(",") if value
-    ]
+def complete_authorization(
+    config: dict[str, Any],
+    token_path: Path,
+    verifier: str,
+    redirect_uri: str,
+    code: str,
+    picked_file_ids: list[str],
+    expected_document_id: str | None = None,
+) -> list[str]:
     if len(picked_file_ids) != 1:
         raise RuntimeError("Google Picker did not return exactly one Google Docs file")
+    if expected_document_id and picked_file_ids != [expected_document_id]:
+        raise RuntimeError("Google Picker returned a different document than the requested document")
     token_endpoint = str(config.get("token_uri") or DEFAULT_TOKEN_ENDPOINT)
     token = _post_form(
         token_endpoint,
         {
             "client_id": str(config["client_id"]),
             "client_secret": str(config["client_secret"]),
-            "code": result["code"],
+            "code": code,
             "code_verifier": verifier,
             "grant_type": "authorization_code",
             "redirect_uri": redirect_uri,
@@ -171,6 +177,50 @@ def authorize(client_secrets: Path, token_path: Path, timeout: int = 300) -> lis
         raise RuntimeError("OAuth response did not include a refresh token")
     write_private_json(token_path, stored)
     return picked_file_ids
+
+
+def authorize(
+    client_secrets: Path,
+    token_path: Path,
+    timeout: int = 300,
+    expected_document_id: str | None = None,
+) -> list[str]:
+    config = _client_config(client_secrets)
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode("ascii")
+    state = secrets.token_urlsafe(32)
+    _CallbackHandler.result = {}
+    _CallbackHandler.expected_state = state
+    _CallbackHandler.event = threading.Event()
+    server = http.server.HTTPServer(("127.0.0.1", 0), _CallbackHandler)
+    redirect_uri = f"http://127.0.0.1:{server.server_port}/callback"
+    parameters = _authorization_parameters(
+        str(config["client_id"]), redirect_uri, verifier, state, expected_document_id
+    )
+    url = AUTHORIZATION_ENDPOINT + "?" + urllib.parse.urlencode(parameters)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print("Open this URL if the browser does not open automatically:")
+    print(url)
+    webbrowser.open(url)
+    if not _CallbackHandler.event.wait(timeout):
+        server.shutdown()
+        raise RuntimeError("OAuth authorization timed out")
+    server.shutdown()
+    result = _CallbackHandler.result
+    if result.get("error") or not result.get("code"):
+        raise RuntimeError(f"OAuth authorization failed: {result.get('error', 'missing code')}")
+    picked_file_ids = [
+        value for value in result.get("picked_file_ids", "").split(",") if value
+    ]
+    return complete_authorization(
+        config,
+        token_path,
+        verifier,
+        redirect_uri,
+        result["code"],
+        picked_file_ids,
+        expected_document_id,
+    )
 
 
 @dataclass

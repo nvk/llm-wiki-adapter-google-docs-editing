@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
-from google_docs_adapter.auth import authorize, default_token_path
+from google_docs_adapter.auth import authorize, default_token_path, document_id_from_reference
+from google_docs_adapter.auth_web import authorize_web
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import load_json, write_private_json
 
@@ -24,9 +26,21 @@ def main() -> int:
     execute_parser.add_argument("--request", required=True)
     execute_parser.add_argument("--response", required=True)
     auth_parser = subparsers.add_parser("auth")
-    auth_parser.add_argument("--client-secrets", required=True)
+    auth_parser.add_argument(
+        "--client-secrets",
+        help="Desktop OAuth client JSON; omit to choose it in a local setup page",
+    )
+    auth_parser.add_argument(
+        "--document",
+        help="Optional Google Docs URL, google-docs resource, or document ID to pin in Picker",
+    )
     auth_parser.add_argument("--token", default=str(default_token_path()))
-    auth_parser.add_argument("--timeout", type=int, default=300)
+    auth_parser.add_argument("--timeout", type=int, default=600)
+    auth_parser.add_argument(
+        "--no-open-browser",
+        action="store_true",
+        help="Print the local setup URL without opening the default browser",
+    )
     args = parser.parse_args()
 
     if args.command == "describe":
@@ -39,11 +53,26 @@ def main() -> int:
         }, sort_keys=True))
         return 0
     if args.command == "auth":
-        picked_file_ids = authorize(
-            Path(args.client_secrets).expanduser().resolve(strict=True),
-            Path(args.token).expanduser().resolve(strict=False),
-            args.timeout,
-        )
+        try:
+            document_id = document_id_from_reference(args.document) if args.document else None
+            token_path = Path(args.token).expanduser().resolve(strict=False)
+            if args.client_secrets:
+                picked_file_ids = authorize(
+                    Path(args.client_secrets).expanduser().resolve(strict=True),
+                    token_path,
+                    args.timeout,
+                    document_id,
+                )
+            else:
+                picked_file_ids = authorize_web(
+                    token_path,
+                    args.timeout,
+                    document_id,
+                    open_browser=not args.no_open_browser,
+                )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"Authorization failed: {exc}", file=sys.stderr)
+            return 2
         print("OAuth token stored with mode 0600.")
         for document_id in picked_file_ids:
             print(f"Authorized resource: google-docs:{document_id}")
