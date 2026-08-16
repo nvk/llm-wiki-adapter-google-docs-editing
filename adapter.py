@@ -66,6 +66,7 @@ def main() -> int:
     )
     native_host_parser = subparsers.add_parser("native-host")
     native_host_parser.add_argument("origin")
+    native_host_parser.add_argument("browser_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
     if args.command == "describe":

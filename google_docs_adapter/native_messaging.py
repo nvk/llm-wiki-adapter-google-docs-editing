@@ -7,7 +7,9 @@ import os
 import shlex
 import socket
 import struct
+import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -29,6 +31,70 @@ EXTENSION_ORIGIN_PREFIX = "chrome-extension://"
 
 class NativeMessagingError(RuntimeError):
     """Raised when installation or native framing is invalid."""
+
+
+def _c_bytes(name: str, value: Path) -> str:
+    encoded = os.fsencode(str(value)) + b"\0"
+    return f"static const char {name}[] = {{{','.join(str(byte) for byte in encoded)}}};\n"
+
+
+def _install_launcher(
+    wrapper: Path,
+    python: Path,
+    entrypoint: Path,
+    socket_path: Path,
+) -> None:
+    if sys.platform != "darwin":
+        script = (
+            "#!/bin/sh\n"
+            f"export LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET={shlex.quote(str(socket_path))}\n"
+            f"exec {shlex.quote(str(python))} {shlex.quote(str(entrypoint))} native-host \"$@\"\n"
+        )
+        wrapper.write_text(script, encoding="utf-8")
+        wrapper.chmod(0o700)
+        return
+
+    compiler = Path("/usr/bin/clang")
+    if not compiler.is_file() or not os.access(compiler, os.X_OK):
+        raise NativeMessagingError("macOS native-host installation requires /usr/bin/clang")
+    source = (
+        "#include <stdlib.h>\n#include <unistd.h>\n#include <stdio.h>\n"
+        + _c_bytes("PYTHON_PATH", python)
+        + _c_bytes("ADAPTER_PATH", entrypoint)
+        + _c_bytes("SOCKET_PATH", socket_path)
+        + r'''
+int main(int argc, char **argv) {
+  if (setenv("LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET", SOCKET_PATH, 1) != 0) return 126;
+  char **args = calloc((size_t)argc + 4, sizeof(char *));
+  if (!args) return 126;
+  args[0] = (char *)PYTHON_PATH;
+  args[1] = (char *)ADAPTER_PATH;
+  args[2] = "native-host";
+  for (int i = 1; i < argc; i++) args[i + 2] = argv[i];
+  args[argc + 2] = NULL;
+  execv(PYTHON_PATH, args);
+  perror("execv");
+  return 127;
+}
+'''
+    )
+    with tempfile.TemporaryDirectory(prefix="native-host-build-", dir=wrapper.parent) as build:
+        build_root = Path(build)
+        source_path = build_root / "launcher.c"
+        output_path = build_root / "native-host"
+        source_path.write_text(source, encoding="utf-8")
+        result = subprocess.run(
+            [str(compiler), "-Os", "-o", str(output_path), str(source_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0 or not output_path.is_file():
+            raise NativeMessagingError("could not compile the macOS native-host launcher")
+        output_path.chmod(0o700)
+        os.replace(output_path, wrapper)
+        wrapper.chmod(0o700)
 
 
 def extension_id_from_manifest(manifest_path: Path | None = None) -> str:
@@ -82,13 +148,7 @@ def install_native_host(
         pass
     ensure_private_socket_parent(native_socket_path())
     wrapper = state_root / "native-host"
-    script = (
-        "#!/bin/sh\n"
-        f"export LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET={shlex.quote(str(native_socket_path()))}\n"
-        f"exec {shlex.quote(str(python))} {shlex.quote(str(entrypoint))} native-host \"$@\"\n"
-    )
-    wrapper.write_text(script, encoding="utf-8")
-    wrapper.chmod(0o700)
+    _install_launcher(wrapper, python, entrypoint, native_socket_path())
     manifest_path = install_dir / f"{NATIVE_HOST_NAME}.json"
     write_private_json(manifest_path, {
         "name": NATIVE_HOST_NAME,
@@ -122,6 +182,7 @@ def connector_status(destination: Path | None = None) -> dict[str, Any]:
                 value.get("name") == NATIVE_HOST_NAME
                 and value.get("type") == "stdio"
                 and value.get("allowed_origins") == [expected]
+                and Path(str(value.get("path", ""))) == bridge_state_root() / "native-host"
                 and Path(str(value.get("path", ""))).is_file()
             )
         except (OSError, ValueError, json.JSONDecodeError, NativeMessagingError):

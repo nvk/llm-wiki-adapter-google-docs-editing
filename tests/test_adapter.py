@@ -370,9 +370,15 @@ class AdapterTests(unittest.TestCase):
             self.assertNotIn("token", json.dumps(manifest).lower())
             self.assertTrue(status["installed"])
             self.assertFalse(status["connected"])
-            wrapper = result["wrapper_path"].read_text(encoding="utf-8")
-            self.assertIn("LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET=", wrapper)
-            self.assertIn(str(result["socket_path"]), wrapper)
+            if sys.platform == "darwin":
+                self.assertIn(
+                    result["wrapper_path"].read_bytes()[:4],
+                    {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"},
+                )
+            else:
+                wrapper = result["wrapper_path"].read_text(encoding="utf-8")
+                self.assertIn("LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET=", wrapper)
+                self.assertIn(str(result["socket_path"]), wrapper)
             wrong_socket = root / "wrong-environment.sock"
             environment = dict(os.environ)
             environment["LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET"] = str(wrong_socket)
@@ -380,6 +386,7 @@ class AdapterTests(unittest.TestCase):
                 [
                     str(result["wrapper_path"]),
                     f"chrome-extension://{extension_id_from_manifest()}/",
+                    "--parent-window=42",
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
