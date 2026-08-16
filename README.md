@@ -7,7 +7,7 @@ and verifying those suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.8.6`
+- Version: `0.8.7`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, plans, receipts, journals, and connector messages remain in
@@ -163,7 +163,11 @@ Create an edit spec under a registered external read root:
 ```
 
 `tab_id` is optional only for a single-tab document. Each `find` must be unique
-across the document. Planning is refused while unresolved suggestions exist.
+across the document. Unresolved suggestions elsewhere in the document are
+preserved as the plan baseline, so additional non-overlapping suggestions can
+be created without forcing the user to accept or reject earlier work. Planning
+still fails when a requested edit overlaps text that already belongs to an
+unresolved suggestion.
 
 After `inspect` and `plan`, build a private apply request:
 

@@ -129,10 +129,6 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
     indexes = tab_text_indexes(inline)
     if not indexes:
         raise ValueError("document has no editable body text")
-    if collect_suggestion_ids(inline):
-        raise ValueError(
-            "extension Suggesting plans require a document with no unresolved existing suggestions"
-        )
     resolved: list[dict[str, Any]] = []
     document_ranges: list[tuple[str, int, int]] = []
     normalized_edits: list[dict[str, Any]] = []

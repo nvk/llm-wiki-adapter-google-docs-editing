@@ -70,6 +70,38 @@ def document(text: str, revision: str, suggestion_ids: list[str] | None = None) 
     }
 
 
+def spanned_document(
+    spans: list[tuple[str, list[str] | None]],
+    revision: str,
+) -> dict:
+    cursor = 1
+    elements: list[dict] = []
+    for text, suggestion_ids in spans:
+        units = len(text.encode("utf-16-le")) // 2
+        element = {
+            "startIndex": cursor,
+            "endIndex": cursor + units,
+            "textRun": {"content": text},
+        }
+        if suggestion_ids:
+            element["suggestedInsertionIds"] = suggestion_ids
+        elements.append(element)
+        cursor += units
+    return {
+        "documentId": "SyntheticDocument123",
+        "revisionId": revision,
+        "title": "Synthetic document",
+        "tabs": [{
+            "tabProperties": {"tabId": "tab-1", "title": "Synthetic tab"},
+            "documentTab": {"body": {"content": [{
+                "startIndex": 1,
+                "endIndex": cursor,
+                "paragraph": {"elements": elements},
+            }]}},
+        }],
+    }
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.applied = False
@@ -775,10 +807,35 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(client.batch_calls, [])
             self.assertEqual(retry["status"], "ok")
 
-    def test_plan_rejects_target_with_existing_suggestion(self) -> None:
+    def test_plan_apply_verify_with_non_overlapping_existing_suggestion(self) -> None:
         class SuggestedClient(FakeClient):
-            def get_document(self, _document_id: str, _mode: str) -> dict:
-                return document("Alpha beta gamma.\n", "revision-1", ["existing-suggestion"])
+            def get_document(
+                self,
+                _document_id: str,
+                mode: str,
+                comments_view_mode: str | None = None,
+            ) -> dict:
+                revision = "revision-2" if self.applied else "revision-1"
+                if mode == "PREVIEW_WITHOUT_SUGGESTIONS":
+                    return spanned_document([
+                        ("Old title\n", None),
+                        ("Body beta text.\n", None),
+                    ], revision)
+                if mode == "PREVIEW_SUGGESTIONS_ACCEPTED":
+                    body = "Body delta text.\n" if self.applied else "Body beta text.\n"
+                    return spanned_document([
+                        ("Proposed title\n", None),
+                        (body, None),
+                    ], revision)
+                body = "Body delta text.\n" if self.applied else "Body beta text.\n"
+                body_suggestions = (
+                    ["new-suggestion-delete", "new-suggestion-insert"]
+                    if self.applied else None
+                )
+                return spanned_document([
+                    ("Proposed title\n", ["existing-title-suggestion"]),
+                    (body, body_suggestions),
+                ], revision)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -787,13 +844,83 @@ class AdapterTests(unittest.TestCase):
                 "schema": "google-docs-edit-spec/v1",
                 "edits": [{"tab_id": "tab-1", "find": "beta", "replace": "delta"}],
             })
+            client = SuggestedClient()
+            plan_response = execute({
+                "operation": "plan",
+                "arguments": {"document_resource": RESOURCE, "edit_spec": str(spec)},
+                "output_dir": str(root / "plan"),
+            }, client)
+            self.assertEqual(plan_response["status"], "ok")
+            plan = root / "plan" / "plan.json"
+            plan_value = json.loads(plan.read_text(encoding="utf-8"))
+            self.assertEqual(
+                plan_value["baseline_suggestion_ids"],
+                ["existing-title-suggestion"],
+            )
+            apply_request = {
+                "operation": "apply",
+                "arguments": {"document_resource": RESOURCE, "plan": str(plan)},
+                "output_dir": str(root / "apply"),
+                "remote_write": {
+                    "plan_sha256": plan_response["summary"]["plan_sha256"],
+                    "idempotency_key": "synthetic-additional-suggestions",
+                    "expected_revision": "revision-1",
+                },
+            }
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")},
+            ):
+                response = execute(apply_request, client, FakeExtension(client))
+            self.assertEqual(response["status"], "ok")
+            verification = response["remote_receipt"]["verification"]
+            self.assertEqual(verification["suggestion_count"], 2)
+            self.assertEqual(
+                verification["created_suggestion_ids"],
+                ["new-suggestion-delete", "new-suggestion-insert"],
+            )
+
+    def test_plan_rejects_target_overlapping_existing_suggestion(self) -> None:
+        class SuggestedClient(FakeClient):
+            def get_document(
+                self,
+                _document_id: str,
+                mode: str,
+                comments_view_mode: str | None = None,
+            ) -> dict:
+                if mode == "PREVIEW_WITHOUT_SUGGESTIONS":
+                    return spanned_document([
+                        ("Old title\n", None),
+                        ("Body beta text.\n", None),
+                    ], "revision-1")
+                if mode == "PREVIEW_SUGGESTIONS_ACCEPTED":
+                    return spanned_document([
+                        ("Proposed title\n", None),
+                        ("Body beta text.\n", None),
+                    ], "revision-1")
+                return spanned_document([
+                    ("Proposed title\n", ["existing-title-suggestion"]),
+                    ("Body beta text.\n", None),
+                ], "revision-1")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{
+                    "tab_id": "tab-1",
+                    "find": "Proposed title",
+                    "replace": "Expanded proposed title",
+                }],
+            })
             response = execute({
                 "operation": "plan",
                 "arguments": {"document_resource": RESOURCE, "edit_spec": str(spec)},
                 "output_dir": str(root / "output"),
             }, SuggestedClient())
             self.assertEqual(response["status"], "error")
-            self.assertIn("no unresolved existing suggestions", response["errors"][0])
+            self.assertIn("overlaps an unresolved existing suggestion", response["errors"][0])
 
     def test_pending_partial_extension_write_refuses_duplicate_retry(self) -> None:
         class PartialClient(FakeClient):
