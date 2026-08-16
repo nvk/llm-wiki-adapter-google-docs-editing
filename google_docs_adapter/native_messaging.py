@@ -81,6 +81,7 @@ def install_native_host(
     wrapper = state_root / "native-host"
     script = (
         "#!/bin/sh\n"
+        f"export LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET={shlex.quote(str(native_socket_path()))}\n"
         f"exec {shlex.quote(str(python))} {shlex.quote(str(entrypoint))} native-host \"$@\"\n"
     )
     wrapper.write_text(script, encoding="utf-8")

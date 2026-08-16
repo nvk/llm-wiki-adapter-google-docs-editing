@@ -364,6 +364,41 @@ class AdapterTests(unittest.TestCase):
             self.assertNotIn("token", json.dumps(manifest).lower())
             self.assertTrue(status["installed"])
             self.assertFalse(status["connected"])
+            wrapper = result["wrapper_path"].read_text(encoding="utf-8")
+            self.assertIn("LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET=", wrapper)
+            self.assertIn(str(result["socket_path"]), wrapper)
+            wrong_socket = root / "wrong-environment.sock"
+            environment = dict(os.environ)
+            environment["LLM_WIKI_GOOGLE_DOCS_NATIVE_SOCKET"] = str(wrong_socket)
+            process = subprocess.Popen(
+                [
+                    str(result["wrapper_path"]),
+                    f"chrome-extension://{extension_id_from_manifest()}/",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+            )
+            try:
+                assert process.stdout is not None
+                self.assertEqual(
+                    read_native_message(process.stdout),
+                    {"protocol": BRIDGE_PROTOCOL, "type": "ready"},
+                )
+                self.assertTrue(result["socket_path"].is_socket())
+                self.assertFalse(wrong_socket.exists())
+            finally:
+                if process.stdin:
+                    process.stdin.close()
+                process.wait(timeout=5)
+                if process.returncode not in {0, None}:
+                    stderr = process.stderr.read().decode("utf-8") if process.stderr else ""
+                    self.fail(f"installed native host exited {process.returncode}: {stderr}")
+                if process.stdout:
+                    process.stdout.close()
+                if process.stderr:
+                    process.stderr.close()
             if os.name == "posix":
                 self.assertEqual(result["manifest_path"].stat().st_mode & 0o077, 0)
                 self.assertEqual(result["wrapper_path"].stat().st_mode & 0o077, 0)
