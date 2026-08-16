@@ -313,6 +313,7 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn("Apply as suggestions", sidepanel)
         self.assertIn("No interaction is required", sidepanel)
         self.assertIn("chrome.runtime.connectNative", worker)
+        self.assertIn("if (!nativePort) connectNativeBridge();", worker)
         self.assertLess(
             worker.index("connectNativeBridge();"),
             worker.index("await chrome.sidePanel.setPanelBehavior"),

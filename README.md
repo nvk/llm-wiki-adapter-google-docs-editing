@@ -7,7 +7,7 @@ and verifying those suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.8.3`
+- Version: `0.8.4`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, plans, receipts, journals, and connector messages remain in

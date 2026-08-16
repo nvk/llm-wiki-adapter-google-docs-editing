@@ -1170,6 +1170,10 @@ async function handleMessage(message) {
   if (!message || message.type !== "get-status") {
     throw new Error("Unknown extension request.");
   }
+  // A Manifest V3 worker can suspend before an in-memory reconnect timer
+  // fires. Opening the status panel wakes the worker and must actively restore
+  // the native connection rather than returning a stale offline state.
+  if (!nativePort) connectNativeBridge();
   const stored = await chrome.storage.session.get(CONNECTOR_STATE_KEY);
   return stored[CONNECTOR_STATE_KEY] || { state: nativePort ? "connected" : "offline", detail: "" };
 }
