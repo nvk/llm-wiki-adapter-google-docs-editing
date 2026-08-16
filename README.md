@@ -7,7 +7,7 @@ verifying the suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.7.4`
+- Version: `0.7.5`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, pairing tokens, plans, receipts, and journals remain in external
@@ -175,6 +175,10 @@ does not redirect or stall the approved job.
 The accessibility tree is handled only in extension memory for the active job
 and is never serialized. Failure diagnostics contain only fixed control counts
 and booleans, never accessible names or document text.
+
+When an unpacked-extension reload invalidates a content script in an already
+open tab, that stale script now stops its timer without leaving recurring
+errors in Chrome. Normal edits do not require extension or document reloads.
 
 Changing from v0.5's browser driver to the v0.6 extension changes the plan
 schema and transport. Old `google-docs-suggestion-plan/v2` plans must be
