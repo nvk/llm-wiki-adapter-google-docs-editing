@@ -321,6 +321,8 @@ class AdapterTests(unittest.TestCase):
         self.assertIn('[role="menuitemradio"]', worker)
         self.assertIn("Accessibility.getFullAXTree", worker)
         self.assertIn("DOM.getBoxModel", worker)
+        self.assertIn('command(tabId, "DOM.focus"', worker)
+        self.assertIn("Google Docs did not accept the exact ${kind} field.", worker)
         self.assertIn("LAST_NORMAL_WINDOW_KEY", worker)
         self.assertIn("chrome.storage.session", worker)
         self.assertIn("stopPolling", poller)

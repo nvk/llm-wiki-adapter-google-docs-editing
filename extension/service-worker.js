@@ -343,6 +343,23 @@ async function clickAXNode(tabId, node) {
   return true;
 }
 
+async function focusAXNode(tabId, node) {
+  if (!node || !node.backendDOMNodeId) return false;
+  let focused = false;
+  try {
+    await command(tabId, "DOM.focus", { backendNodeId: node.backendDOMNodeId });
+    focused = true;
+  } catch (_error) {
+    // Some Docs controls require a trusted mouse event instead of DOM.focus.
+  }
+  const point = await axNodePoint(tabId, node);
+  if (point) {
+    await clickPoint(tabId, point);
+    focused = true;
+  }
+  return focused;
+}
+
 function namedAXNode(nodes, role, exactName) {
   const expected = exactName.toLowerCase();
   return nodes.find((node) => (
@@ -690,6 +707,7 @@ async function openFindReplace(tabId) {
   await waitFor(
     async () => findReplaceOpen(tabId),
     "",
+    30000,
   ).catch(async () => {
     const diagnostics = await findReplaceAXDiagnostics(tabId);
     throw new Error(
@@ -703,7 +721,7 @@ async function openFindReplace(tabId) {
 async function focusFindReplaceAXInput(tabId, kind) {
   const controls = await findReplaceAXState(tabId);
   const node = kind === "find" ? controls.findInput : controls.replaceInput;
-  return node ? clickAXNode(tabId, node) : false;
+  return node ? focusAXNode(tabId, node) : false;
 }
 
 async function findReplaceAXInputEquals(tabId, kind, expected) {
@@ -729,15 +747,30 @@ async function fillFindReplaceInput(tabId, kind, text) {
   const modifiers = platform.toLowerCase().includes("mac") ? 4 : 2;
   await dispatchShortcut(tabId, "a", "KeyA", modifiers);
   await command(tabId, "Input.insertText", { text });
-  if (await findReplaceAXInputEquals(tabId, kind, text)) return;
   const field = kind === "find" ? "findInput" : "replaceInput";
-  const accepted = await evaluate(tabId, findReplaceContextExpression(`
-    const element = ${field};
-    return (typeof element.value === "string" ? element.value : element.textContent) === ${JSON.stringify(text)};
-  `));
-  if (!accepted) {
-    throw new Error("Google Docs did not accept an exact replacement field.");
+  const accepted = async () => {
+    if (await findReplaceAXInputEquals(tabId, kind, text)) return true;
+    return Boolean(await evaluate(tabId, findReplaceContextExpression(`
+      const element = ${field};
+      return (typeof element.value === "string" ? element.value : element.textContent) === ${JSON.stringify(text)};
+    `)));
+  };
+  try {
+    await waitFor(accepted, "", 3000);
+    return;
+  } catch (_error) {
+    // Retry after a fresh semantic focus; Docs can move focus while opening the dialog.
   }
+  if (!await focusFindReplaceAXInput(tabId, kind)) {
+    throw new Error(`Google Docs ${kind} input is unavailable.`);
+  }
+  await dispatchShortcut(tabId, "a", "KeyA", modifiers);
+  await command(tabId, "Input.insertText", { text });
+  await waitFor(
+    accepted,
+    `Google Docs did not accept the exact ${kind} field.`,
+    5000,
+  );
 }
 
 async function findReplaceAXCheckbox(tabId, exactName) {
