@@ -6,6 +6,16 @@ let nativePort = null;
 let activeJob = null;
 let reconnectTimer = null;
 let pendingBoundary = null;
+let platformInfoPromise = null;
+
+async function platformOS() {
+  if (!platformInfoPromise) {
+    platformInfoPromise = chrome.runtime.getPlatformInfo()
+      .then((info) => String(info && info.os || ""))
+      .catch(() => "");
+  }
+  return platformInfoPromise;
+}
 
 async function setConnectorState(state, detail = "") {
   await chrome.storage.session.set({
@@ -606,8 +616,7 @@ async function ensureSuggesting(tabId) {
     throw new Error("The Google Docs editing-mode control is unavailable.");
   }
   if (!mode.text.includes("suggest")) {
-    const platform = String(await evaluate(tabId, "navigator.platform || ''"));
-    const modifiers = platform.toLowerCase().includes("mac") ? 13 : 11;
+    const modifiers = await platformOS() === "mac" ? 13 : 11;
     await dispatchShortcut(tabId, "x", "KeyX", modifiers);
     try {
       await waitFor(
@@ -726,7 +735,9 @@ function findReplaceContextExpression(body) {
 function findReplaceMenuItemExpression() {
   return `(() => {
     const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
-    const candidates = Array.from(document.querySelectorAll('[role="menuitem"],[role="option"]'));
+    const candidates = Array.from(document.querySelectorAll(
+      '[role="menuitem"],[role="option"],.goog-menuitem,.docs-material-menuitem'
+    ));
     const element = candidates.find((candidate) => {
       const rect = candidate.getBoundingClientRect();
       const style = getComputedStyle(candidate);
@@ -745,7 +756,9 @@ function findReplaceMenuItemExpression() {
 function focusFindReplaceMenuItemExpression() {
   return `(() => {
     const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
-    const element = Array.from(document.querySelectorAll('[role="menuitem"],[role="option"]'))
+    const element = Array.from(document.querySelectorAll(
+      '[role="menuitem"],[role="option"],.goog-menuitem,.docs-material-menuitem'
+    ))
       .find((candidate) => {
         const rect = candidate.getBoundingClientRect();
         const style = getComputedStyle(candidate);
@@ -777,12 +790,35 @@ async function findReplaceAXMenuItem(tabId) {
 }
 
 async function dispatchShortcut(tabId, key, code, modifiers) {
-  await command(tabId, "Input.dispatchKeyEvent", {
-    type: "rawKeyDown", key, code, modifiers,
-  });
-  await command(tabId, "Input.dispatchKeyEvent", {
-    type: "keyUp", key, code, modifiers,
-  });
+  const virtualKeys = {
+    Enter: 13,
+    Escape: 27,
+    Tab: 9,
+    KeyA: 65,
+    KeyH: 72,
+    KeyX: 88,
+  };
+  const virtualKeyCode = virtualKeys[code];
+  const common = {
+    key,
+    code,
+    modifiers,
+    ...(virtualKeyCode ? { windowsVirtualKeyCode: virtualKeyCode } : {}),
+  };
+  await command(tabId, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...common });
+  await command(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...common });
+}
+
+async function focusDocumentForShortcut(tabId) {
+  await command(tabId, "Page.bringToFront");
+  await evaluate(tabId, `(() => {
+    window.focus();
+    const active = document.activeElement;
+    if (active && typeof active.blur === "function" && active !== document.body) active.blur();
+    if (document.body && typeof document.body.focus === "function") document.body.focus();
+    return document.hasFocus();
+  })()`);
+  await sleep(200);
 }
 
 async function waitForFindReplaceOpen(tabId, timeoutMs) {
@@ -826,6 +862,8 @@ async function activateFindReplaceMenuItem(tabId, keyboard = false) {
 
 async function openFindReplace(tabId) {
   if (await findReplaceOpen(tabId)) return;
+  await focusDocumentForShortcut(tabId);
+  await dispatchShortcut(tabId, "Escape", "Escape", 0);
   try {
     await activateFindReplaceMenuItem(tabId);
   } catch (_error) {
@@ -833,11 +871,18 @@ async function openFindReplace(tabId) {
   }
   if (await waitForFindReplaceOpen(tabId, 4000)) return;
   await dispatchShortcut(tabId, "Escape", "Escape", 0);
-  const platform = String(await evaluate(tabId, "navigator.platform || ''"));
-  const modifiers = platform.toLowerCase().includes("mac") ? 12 : 2;
-  await dispatchShortcut(tabId, "H", "KeyH", modifiers);
-  if (await waitForFindReplaceOpen(tabId, 5000)) return;
-  await dispatchShortcut(tabId, "Escape", "Escape", 0);
+  const primaryModifiers = await platformOS() === "mac" ? 12 : 2;
+  const shortcutAttempts = [
+    ["H", primaryModifiers],
+    ["h", primaryModifiers],
+    ["H", primaryModifiers === 12 ? 2 : 12],
+  ];
+  for (const [key, modifiers] of shortcutAttempts) {
+    await focusDocumentForShortcut(tabId);
+    await dispatchShortcut(tabId, key, "KeyH", modifiers);
+    if (await waitForFindReplaceOpen(tabId, 5000)) return;
+    await dispatchShortcut(tabId, "Escape", "Escape", 0);
+  }
   try {
     await activateFindReplaceMenuItem(tabId, true);
   } catch (_error) {
@@ -894,8 +939,7 @@ async function fillFindReplaceInput(tabId, kind, text) {
     }
   }
   await sleep(150);
-  const platform = String(await evaluate(tabId, "navigator.platform || ''"));
-  const modifiers = platform.toLowerCase().includes("mac") ? 4 : 2;
+  const modifiers = await platformOS() === "mac" ? 4 : 2;
   await dispatchShortcut(tabId, "a", "KeyA", modifiers);
   await command(tabId, "Input.insertText", { text });
   const field = kind === "find" ? "findInput" : "replaceInput";
@@ -1043,7 +1087,6 @@ async function replaceUnique(tabId, documentId, edit, jobId, firstMutation) {
   }
   await clickFindReplaceControl(tabId, "button", "Replace");
   await sleep(450);
-  await dispatchShortcut(tabId, "Escape", "Escape", 0);
 }
 
 async function navigateToTab(tabId, documentId, documentTabId) {

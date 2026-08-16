@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LLM Wiki Google Docs Suggestions",
   "description": "Automatically open an approved Google Doc and apply revision-locked llm-wiki plans as suggestions.",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA03UehCgsfZ1GhZMsu9B3WIZfquIQt6hJEqX6sIE0Rgv7T7S66i4dk18mz4GOfaXnNg7O058DsN33Y8144ZIGg2IEpKMdC5NoTerStw2szkd+4+ulxJMfYF/fHhbnjrp+e+3VuVTlnNUL+XynD6aLH47aeFmsAt9Fxeq+ulLLSPYhKitOJltIlE43kcT58UpVrxg5xYHuOjEyjvXZsNh9e6TvPQnbAREM/EHhRC+3zSMTSWce4Vv6nPlf0JdTCwLzbRDZzQ0TFb3aBDrKH54vAHecLMhS8UONJJG8XfsCAT7d4Npna0K3rqHu2B7S3Rdh2eJeO2WOeYucCKpIS+7r6wIDAQAB",
   "minimum_chrome_version": "120",
   "permissions": [

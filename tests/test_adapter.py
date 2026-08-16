@@ -446,15 +446,17 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("findReplaceMenuItemExpression", worker)
         self.assertIn("focusFindReplaceMenuItemExpression", worker)
         self.assertIn("activateFindReplaceMenuItem", worker)
+        self.assertIn("chrome.runtime.getPlatformInfo", worker)
+        self.assertIn('command(tabId, "Page.bringToFront")', worker)
+        self.assertIn("windowsVirtualKeyCode", worker)
+        self.assertIn("shortcutAttempts", worker)
+        self.assertIn(".goog-menuitem", worker)
         self.assertIn("focusReplaceFromFindInput", worker)
         self.assertIn("dialogEditable.length === 2", worker)
         self.assertIn("waitForFindReplaceField", worker)
         self.assertIn('new InputEvent("input"', worker)
         self.assertIn("suggestingDiagnosticsExpression", worker)
-        self.assertIn(
-            'const modifiers = platform.toLowerCase().includes("mac") ? 13 : 11;',
-            worker,
-        )
+        self.assertIn('const modifiers = await platformOS() === "mac" ? 13 : 11;', worker)
         self.assertIn('[role="menuitemradio"]', worker)
         self.assertIn("Accessibility.getFullAXTree", worker)
         self.assertIn("DOM.getBoxModel", worker)
@@ -467,6 +469,11 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn("matches[0]", worker)
         self.assertNotIn('visibleElementExpression(".docs-findandreplacedialog")', worker)
         self.assertNotIn("<all_urls>", json.dumps(manifest))
+        replace_unique = worker[
+            worker.index("async function replaceUnique"):
+            worker.index("async function navigateToTab")
+        ]
+        self.assertNotIn('dispatchShortcut(tabId, "Escape"', replace_unique)
 
     def test_native_host_installer_uses_stable_extension_origin(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

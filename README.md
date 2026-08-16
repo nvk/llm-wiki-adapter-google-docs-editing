@@ -7,7 +7,7 @@ and verifying those suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.8.7`
+- Version: `0.8.8`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, plans, receipts, journals, and connector messages remain in
@@ -29,6 +29,12 @@ When a job arrives, the extension finds the exact approved document or opens it
 in normal Chrome, focuses that tab, applies the plan, and returns a provisional
 result. The side panel is status-only; no click is required. Chrome must already
 be running and signed in to Google, but the user does not need to prepare a tab.
+
+Version 0.8.8 also owns Find-and-replace preparation completely. It derives the
+platform from Chrome rather than page JavaScript, brings the approved tab to the
+front, retries trusted menu and documented-shortcut activation, and keeps the
+verified dialog open across a multi-edit plan. The user must never pre-open the
+dialog.
 
 The extension has no `<all_urls>` or localhost host permission. Persistent host
 access is limited to `https://docs.google.com/*`.
