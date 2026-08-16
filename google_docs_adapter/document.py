@@ -96,14 +96,12 @@ class TabTextIndex:
                     f"find text must occur exactly once in the selected tab; found {len(positions)}"
                 )
             selected = positions[0]
-            occurrence_value = 1
         else:
             if occurrence < 1 or occurrence > len(positions):
                 raise ValueError(
                     f"occurrence {occurrence} is unavailable in the selected tab; found {len(positions)}"
                 )
             selected = positions[occurrence - 1]
-            occurrence_value = occurrence
         final = selected + len(needle)
         if final > len(self.starts):
             raise ValueError("text match has no document index mapping")

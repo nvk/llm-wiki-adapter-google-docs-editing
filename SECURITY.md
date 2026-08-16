@@ -4,13 +4,19 @@ This private repository contains tool code only. Never commit document content,
 document identifiers, OAuth credentials, tokens, edit plans, API responses,
 receipts, journals, or generated results.
 
-Runtime access uses the `drive.file` OAuth scope and exact document resources
-registered in llm-wiki's mode-0600 adapter registry. Apply operations require an
-exact approved plan hash and use `requiredRevisionId` plus `writeMode: SUGGEST`.
-Before any mutating request, a read-only Developer Preview field must be echoed
-by Google; otherwise the adapter fails closed. A write is successful only when
-Google also echoes suggest mode, reports all suggestion threads saved, and
-read-back verification proves the rejected and accepted projections.
+Runtime API access uses the `drive.file` OAuth scope and exact document
+resources registered in llm-wiki's mode-0600 adapter registry. Apply operations
+require an exact approved plan hash and expected revision. The API is used for
+planning and verification; mutation is performed only through the normal
+Google Docs UI after its mode selector visibly confirms **Suggesting**. A write
+is successful only when API read-back discovers new suggestion IDs and proves
+the rejected and accepted projections.
+
+The browser uses a dedicated external Chrome user-data directory. It never
+reads or reuses the user's normal Chrome profile. The tracked
+`custom-codex-google-docs` nono profile grants only the workspace plus Chrome's
+Crashpad directory required by the system Chrome binary. Browser sign-in state,
+history, caches, and cookies stay in the external runtime data plane.
 
 Interactive authorization is served only on a random `127.0.0.1` port. The
 one-click page uses a per-run local CSRF token, strict same-origin POST
@@ -21,6 +27,8 @@ client credentials. User tokens are stored in a separate mode-0600 file and do
 not duplicate the managed client secret. An optional document pin is passed to
 Picker and independently checked on callback.
 
-The Google suggestion-writing API is Developer Preview. Use it only with an
-enrolled Google Workspace account and allowlisted Cloud project. Preview APIs
-are not a production SLA.
+The browser driver fails before mutation when it cannot prove editor readiness,
+Suggesting mode, or a deterministic unique replacement. It writes a pending
+idempotency journal before the first replacement so a crash or partial run
+cannot silently duplicate suggestions on retry. API projection checks remain
+the final authority; UI success alone is never accepted as proof.

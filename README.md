@@ -7,7 +7,7 @@ the document back in accepted and rejected projection modes.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.4.0`
+- Version: `0.5.0`
 
 The repository never stores document content, document identifiers, OAuth
 credentials, tokens, plans, responses, journals, or receipts. All of those are
@@ -19,14 +19,15 @@ Every successful `apply`:
 
 1. is bound to the SHA-256 of the exact plan file;
 2. requires an explicit llm-wiki `--approve-remote-write` flag;
-3. proves Developer Preview access with a read-only, comments-omitted
-   `commentsViewMode` preflight before sending any edit;
-4. sends `writeControl.writeMode: SUGGEST`;
-5. sends the plan's `requiredRevisionId`;
-6. requires Google to echo `writeMode: SUGGEST` and report
-   `commentUpdateState: ALL_SAVED`;
-7. captures the created suggestion IDs;
-8. confirms those IDs exist in a `SUGGESTIONS_INLINE` read-back;
+3. confirms the exact Docs API revision and both baseline projections before
+   opening the editor;
+4. opens an isolated, adapter-only Chrome profile, never the user's normal
+   Chrome profile;
+5. proves the normal Google Docs UI is in **Suggesting** mode before the first
+   replacement and again after every replacement;
+6. records a private pending journal immediately before the first UI mutation;
+7. discovers the created suggestion IDs through Docs API read-back;
+8. confirms those IDs exist in the inline projection;
 9. confirms the rejected projection equals the pre-write document; and
 10. confirms the accepted projection equals the approved replacement plan.
 
@@ -34,22 +35,17 @@ Any failed condition returns an error. A caller-stable idempotency key is
 journaled outside the repository so retrying a successful operation cannot
 create the suggestions twice.
 
-Google can silently ignore Developer Preview request fields for a project that
-is not enrolled. The read-only preflight prevents that behavior from turning an
-approved suggestion into a direct edit: if Preview access is not explicitly
-confirmed, `apply` fails before the mutating `batchUpdate` request.
+The adapter no longer uses the Developer Preview suggestion-writing API. The
+Docs API remains the revision-locked planning and verification channel; the
+ordinary Google Docs browser UI is the write channel. This works with consumer
+Google accounts that can use Suggesting in the document UI.
 
 ## Google prerequisite
 
-Suggestion creation through the Docs API is currently Google Workspace
-Developer Preview. The Google Workspace account and Cloud project must be
-accepted into the Developer Preview Program. Enable the Google Docs API and
-Google Drive API, enable the Google Picker API, and create an OAuth **Desktop
-app** client for that project. The adapter requests only
-`https://www.googleapis.com/auth/drive.file`.
-
-This private adapter must not be shared as a public application while the
-feature remains Pre-GA.
+Enable the Google Docs API, Google Drive API, and Google Picker API, then create
+an OAuth **Desktop app** client. The API authorization requests only
+`https://www.googleapis.com/auth/drive.file`. No Google Workspace subscription
+or Developer Preview enrollment is required for browser-backed suggestions.
 
 Google does not permit OAuth clients to be created or modified
 programmatically. Creating the application identity in Google Cloud Console is
@@ -59,10 +55,13 @@ then see only a **Connect with Google** button, Google consent, and Picker.
 
 ## Install and authenticate
 
-The runtime has no third-party Python dependencies:
+Install the Python dependency into the private adapter environment. Playwright
+uses the installed Google Chrome application; do not install or reuse a normal
+Chrome user-data directory:
 
 ```bash
 python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python adapter.py configure-oauth \
   --client-secrets /absolute/private/downloaded-desktop-client.json
@@ -91,6 +90,20 @@ needed. Keep all credential material outside this repository.
 Run `auth` again to grant the same OAuth client access to another document;
 previously selected file IDs remain recorded in the private token metadata.
 
+There is a second, one-time authorization for the browser write channel. Start
+Codex with the tracked `codex-google-docs` dotfiles profile, then run:
+
+```bash
+.venv/bin/python adapter.py browser-auth \
+  --document 'https://docs.google.com/document/d/<document-id>/edit'
+```
+
+Chrome opens with a dedicated user-data directory. Sign in to Google in that
+window. The command succeeds only after the exact document editor and its mode
+selector are ready. The dedicated profile defaults to `browser-profile/`
+inside `LLM_WIKI_GOOGLE_DOCS_STATE_DIR`; it is runtime data and must never be
+placed in this repository.
+
 The default idempotency journal is
 `~/.local/state/llm-wiki/google-docs-editing`. Optional path overrides belong in
 the launcher environment, not in the repository or adapter registry:
@@ -99,6 +112,7 @@ the launcher environment, not in the repository or adapter registry:
 export GOOGLE_OAUTH_TOKEN_FILE=/absolute/private/google-docs-token.json
 export GOOGLE_OAUTH_CLIENT_FILE=/absolute/private/google-docs-oauth-client.json
 export LLM_WIKI_GOOGLE_DOCS_STATE_DIR=/absolute/private/google-docs-state
+export LLM_WIKI_GOOGLE_DOCS_BROWSER_PROFILE_DIR=/absolute/private/google-docs-browser
 ```
 
 When using any override, add its name with `adapter add --env <NAME>` so the
@@ -139,14 +153,17 @@ Place this edit specification in the registered external read root:
 }
 ```
 
-`tab_id` can be omitted only for a single-tab document. Add one-based
-`occurrence` only when the find text legitimately appears more than once. A
-plan fails if the target overlaps an unresolved existing suggestion.
+`tab_id` can be omitted only for a single-tab document. Browser plans require
+each `find` value to be unique across the entire document and do not accept `occurrence`.
+v0.5 also refuses to plan while the document has any unresolved suggestions;
+this keeps UI Find-and-replace deterministic and prevents interaction with
+someone else's pending changes.
 
 Run `inspect` first to obtain private tab text and IDs, then run `plan`. Both
 operations are remote reads and produce only private artifacts in the external
-output root. A plan records exact Docs API requests, accepted/rejected
-projection hashes, the current revision, and its own SHA-256.
+output root. A plan records resolved document indices, accepted/rejected
+projection hashes, the current revision, and its own SHA-256. It contains no
+caller-supplied browser actions or mutating Docs API request body.
 
 ## Approve and apply
 
@@ -184,10 +201,12 @@ in the private output root with mode `0600`.
 
 ## Current limits
 
-- Developer Preview access is mandatory until Google makes suggestion writes GA.
-- v0.4 supports exact body-text replacements, including multi-tab documents.
-- Targets may not overlap unresolved suggestions; unrelated suggestions are
-  preserved.
+- v0.5 supports exact, unique body-text replacements, including multi-tab
+  documents.
+- The plan is refused when unresolved suggestions already exist.
+- Browser writes are interactive/headful and require the dedicated profile to
+  remain signed in.
 - Header/footer settings, named-range creation, tab changes, and unsupported
-  suggest-mode request types are not generated.
-- The tool never accepts arbitrary raw `batchUpdate` JSON from the caller.
+  browser edit types are not generated.
+- The tool never accepts arbitrary browser actions or raw `batchUpdate` JSON
+  from the caller.

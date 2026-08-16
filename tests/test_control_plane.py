@@ -94,7 +94,7 @@ class ApiHandler(http.server.BaseHTTPRequestHandler):
 
 
 class ControlPlaneIntegrationTests(unittest.TestCase):
-    def test_real_cli_plan_apply_and_idempotent_replay(self) -> None:
+    def test_real_cli_registration_and_browser_plan(self) -> None:
         cli_raw = os.environ.get("LLM_WIKI_CLI")
         if not cli_raw:
             self.skipTest("LLM_WIKI_CLI is not set")
@@ -185,63 +185,10 @@ class ControlPlaneIntegrationTests(unittest.TestCase):
                 self.assertTrue(plan_run["summary"]["tracked_changes"])
                 plan = outputs / "plan" / "plan.json"
                 plan_value = json.loads(plan.read_text())
-                plan_sha = sha256_file(plan)
-                apply_request = inputs / "apply-request.json"
-                write_private_json(apply_request, {
-                    "protocol": "llm-wiki-adapter/v1",
-                    "adapter_id": "google-docs-editing",
-                    "operation": "apply",
-                    "arguments": {"document_resource": RESOURCE, "plan": str(plan)},
-                    "output_dir": str(outputs / "apply"),
-                    "remote_write": {
-                        "plan_sha256": plan_sha,
-                        "idempotency_key": "control-plane-write-0001",
-                        "expected_revision": plan_value["revision_id"],
-                    },
-                    "options": {},
-                })
-                receipt = outputs / "apply-receipt.json"
-                ApiHandler.preview_supported = False
-                failed = run_raw(
-                    "adapter", "run", "google-docs-editing",
-                    "--request", str(apply_request),
-                    "--response", str(outputs / "unsupported-preview-receipt.json"),
-                    "--approve-remote-write", plan_sha,
-                    "--json",
-                )
-                self.assertNotEqual(failed.returncode, 0)
+                self.assertEqual(plan_value["schema"], "google-docs-suggestion-plan/v2")
+                self.assertEqual(plan_value["write_transport"], "browser-suggesting-ui")
+                self.assertEqual(plan_run["summary"]["plan_sha256"], sha256_file(plan))
                 self.assertEqual(ApiHandler.post_count, 0)
-                self.assertFalse(ApiHandler.applied)
-
-                ApiHandler.preview_supported = True
-                result = json.loads(run(
-                    "adapter", "run", "google-docs-editing",
-                    "--request", str(apply_request),
-                    "--response", str(receipt),
-                    "--approve-remote-write", plan_sha,
-                    "--json",
-                ).stdout)
-                self.assertEqual(result["remote_write"], {
-                    "resource_count": 1,
-                    "status": "verified",
-                    "verified": True,
-                })
-                self.assertNotIn(DOCUMENT_ID, json.dumps(result))
-                full_receipt = json.loads(receipt.read_text())
-                self.assertEqual(full_receipt["remote_receipt"]["status"], "verified")
-                self.assertEqual(ApiHandler.last_body["writeControl"], {
-                    "writeMode": "SUGGEST",
-                    "requiredRevisionId": "revision-1",
-                })
-                replay_receipt = outputs / "apply-replay-receipt.json"
-                run(
-                    "adapter", "run", "google-docs-editing",
-                    "--request", str(apply_request),
-                    "--response", str(replay_receipt),
-                    "--approve-remote-write", plan_sha,
-                    "--json",
-                )
-                self.assertEqual(ApiHandler.post_count, 1)
         finally:
             server.shutdown()
             thread.join(timeout=5)

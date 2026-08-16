@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .client import GoogleDocsClient, GoogleDocsError
+from .browser import BrowserSuggestionDriver
+from .client import GoogleDocsClient
 from .document import (
     apply_text_edits,
     collect_suggestion_ids,
@@ -28,9 +29,8 @@ from .storage import (
 INLINE = "SUGGESTIONS_INLINE"
 ACCEPTED = "PREVIEW_SUGGESTIONS_ACCEPTED"
 REJECTED = "PREVIEW_WITHOUT_SUGGESTIONS"
-PLAN_SCHEMA = "google-docs-suggestion-plan/v1"
+PLAN_SCHEMA = "google-docs-suggestion-plan/v2"
 EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
-COMMENTS_OMITTED = "COMMENTS_VIEW_MODE_OMITTED"
 
 
 def _response(operation: str, status: str, run_id: str, **values: Any) -> dict[str, Any]:
@@ -129,6 +129,10 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
     indexes = tab_text_indexes(inline)
     if not indexes:
         raise ValueError("document has no editable body text")
+    if collect_suggestion_ids(inline):
+        raise ValueError(
+            "browser Suggesting plans require a document with no unresolved existing suggestions"
+        )
     resolved: list[dict[str, Any]] = []
     document_ranges: list[tuple[str, int, int]] = []
     normalized_edits: list[dict[str, Any]] = []
@@ -151,6 +155,16 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
             raise ValueError("every edit requires different string replace text")
         if occurrence is not None and (not isinstance(occurrence, int) or occurrence < 1):
             raise ValueError("edit occurrence must be a positive integer")
+        if occurrence is not None:
+            raise ValueError(
+                "browser Suggesting plans require unique find text and do not accept occurrence"
+            )
+        matches_across_document = sum(index.text.count(find) for index in indexes.values())
+        if matches_across_document != 1:
+            raise ValueError(
+                "browser Suggesting find text must occur exactly once across the entire document; "
+                f"found {matches_across_document}"
+            )
         _flat_start, _flat_end, start, end = indexes[tab_id].locate(find, occurrence)
         for existing_tab, existing_start, existing_end in document_ranges:
             if tab_id == existing_tab and start < existing_end and end > existing_start:
@@ -169,27 +183,14 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
         )
     accepted_before = tab_texts(views["accepted"])
     accepted_expected, _accepted_ranges = apply_text_edits(accepted_before, normalized_edits)
-    requests: list[dict[str, Any]] = []
-    for edit in sorted(resolved, key=lambda item: (item["tab_id"], item["start_index"]), reverse=True):
-        range_value: dict[str, Any] = {
-            "startIndex": edit["start_index"],
-            "endIndex": edit["end_index"],
-        }
-        location: dict[str, Any] = {"index": edit["start_index"]}
-        if edit["tab_id"]:
-            range_value["tabId"] = edit["tab_id"]
-            location["tabId"] = edit["tab_id"]
-        requests.append({"deleteContentRange": {"range": range_value}})
-        if edit["replace"]:
-            requests.append({"insertText": {"text": edit["replace"], "location": location}})
     plan = {
         "schema": PLAN_SCHEMA,
+        "write_transport": "browser-suggesting-ui",
         "document_resource": resource,
         "revision_id": str(inline["revisionId"]),
         "edit_spec_sha256": sha256_file(edit_spec_path),
         "created_at_unix": int(time.time()),
         "edits": resolved,
-        "requests": requests,
         "baseline_suggestion_ids": sorted(collect_suggestion_ids(inline)),
         "projections": {
             "rejected_before": projection_hashes(views["rejected"]),
@@ -210,7 +211,7 @@ def plan_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[
         run_id,
         summary={
             "edit_count": len(resolved),
-            "request_count": len(requests),
+            "browser_action_count": len(resolved),
             "plan_sha256": plan_sha256,
             "expected_revision_sha256": text_hash(str(inline["revisionId"])),
             "tracked_changes": True,
@@ -251,6 +252,8 @@ def _new_suggestion_ids(plan: dict[str, Any], views: dict[str, dict[str, Any]]) 
 
 
 def _journal_path(idempotency_key: str) -> Path:
+    if not idempotency_key or len(idempotency_key) > 256:
+        raise ValueError("remote_write idempotency_key must contain 1-256 characters")
     raw = os.environ.get("LLM_WIKI_GOOGLE_DOCS_STATE_DIR")
     root = (
         Path(raw).expanduser().resolve(strict=False)
@@ -265,33 +268,52 @@ def _journal_path(idempotency_key: str) -> Path:
     return root / "journal" / f"{text_hash(idempotency_key)}.json"
 
 
-def _preview_preflight(
+def _views_match_plan_baseline(plan: dict[str, Any], views: dict[str, dict[str, Any]]) -> bool:
+    return (
+        str(views["inline"].get("revisionId", "")) == str(plan.get("revision_id", ""))
+        and projection_hashes(views["rejected"])
+        == plan["projections"]["rejected_before"]
+        and projection_hashes(views["accepted"])
+        == plan["projections"]["accepted_before"]
+        and collect_suggestion_ids(views["inline"])
+        == set(plan["baseline_suggestion_ids"])
+    )
+
+
+def _wait_for_browser_verification(
     client: GoogleDocsClient,
     document_id: str,
+    plan: dict[str, Any],
+    timeout_seconds: int = 30,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        views = _stable_views(client, document_id)
+        candidates = _new_suggestion_ids(plan, views)
+        try:
+            return views, _verify_views(plan, views, candidates)
+        except RuntimeError as exc:
+            last_error = exc
+            time.sleep(0.5)
+    raise RuntimeError(
+        f"browser write was not verified by Google Docs API read-back: {last_error}"
+    )
+
+
+def apply_suggestions(
+    request: dict[str, Any],
+    client: GoogleDocsClient,
+    browser: BrowserSuggestionDriver | Any | None = None,
 ) -> dict[str, Any]:
-    """Prove Developer Preview access with a read before any mutation."""
-    try:
-        document = client.get_document(document_id, INLINE, COMMENTS_OMITTED)
-    except GoogleDocsError as exc:
-        raise RuntimeError(
-            "Google Docs comments and suggestions Developer Preview is unavailable "
-            "for this OAuth project/account; no edit was sent"
-        ) from exc
-    if document.get("commentsViewMode") != COMMENTS_OMITTED:
-        raise RuntimeError(
-            "Google Docs did not confirm comments and suggestions Developer Preview "
-            "access; no edit was sent"
-        )
-    return document
-
-
-def apply_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict[str, Any]:
     resource = str(request["arguments"]["document_resource"])
     document_id = document_id_from_resource(resource)
     plan_path = Path(request["arguments"]["plan"]).resolve(strict=True)
     plan = load_json(plan_path, "suggestion plan")
     if plan.get("schema") != PLAN_SCHEMA:
         raise ValueError(f"plan schema must be {PLAN_SCHEMA}")
+    if plan.get("write_transport") != "browser-suggesting-ui":
+        raise ValueError("plan does not authorize the browser Suggesting transport")
     if plan.get("document_resource") != resource:
         raise ValueError("plan document_resource does not match the request")
     remote_write = request.get("remote_write")
@@ -305,68 +327,98 @@ def apply_suggestions(request: dict[str, Any], client: GoogleDocsClient) -> dict
         raise ValueError("remote_write expected_revision does not match plan revision")
     idempotency_key = str(remote_write.get("idempotency_key", ""))
     journal_path = _journal_path(idempotency_key)
+    run_id = text_hash(idempotency_key)[:24]
     if journal_path.is_file():
         stored = load_json(journal_path, "idempotency journal")
         if stored.get("plan_sha256") != plan_sha256 or stored.get("resource") != resource:
             raise RuntimeError("idempotency key was already used for a different remote write")
         response = stored.get("response")
-        if not isinstance(response, dict):
+        if isinstance(response, dict):
+            return response
+        if stored.get("status") != "pending":
             raise RuntimeError("idempotency journal is invalid")
-        return response
-
-    current = _preview_preflight(client, document_id)
-    current_revision = str(current.get("revisionId", ""))
-    run_id = text_hash(idempotency_key)[:24]
-    if current_revision != expected_revision:
         views = _stable_views(client, document_id)
-        candidates = _new_suggestion_ids(plan, views)
-        verification = _verify_views(plan, views, candidates)
+        try:
+            verification = _verify_views(plan, views, _new_suggestion_ids(plan, views))
+        except RuntimeError as exc:
+            if not _views_match_plan_baseline(plan, views):
+                raise RuntimeError(
+                    "a prior browser write is pending or partial; refusing to create duplicate suggestions"
+                ) from exc
+        else:
+            verification["recovered_from_pending_journal"] = True
+            response = _successful_apply_response(
+                resource,
+                plan_sha256,
+                idempotency_key,
+                expected_revision,
+                str(views["inline"]["revisionId"]),
+                verification,
+                run_id,
+            )
+            write_private_json(
+                journal_path,
+                {"plan_sha256": plan_sha256, "resource": resource, "response": response},
+            )
+            return response
+
+    views = _stable_views(client, document_id)
+    if not _views_match_plan_baseline(plan, views):
+        try:
+            verification = _verify_views(plan, views, _new_suggestion_ids(plan, views))
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "document revision or projections changed after planning; no browser edit was sent"
+            ) from exc
         verification["recovered_after_revision_change"] = True
         response = _successful_apply_response(
-            resource, plan_sha256, idempotency_key, expected_revision,
-            str(views["inline"]["revisionId"]), verification, run_id,
+            resource,
+            plan_sha256,
+            idempotency_key,
+            expected_revision,
+            str(views["inline"]["revisionId"]),
+            verification,
+            run_id,
         )
-        write_private_json(journal_path, {"plan_sha256": plan_sha256, "resource": resource, "response": response})
+        write_private_json(
+            journal_path,
+            {"plan_sha256": plan_sha256, "resource": resource, "response": response},
+        )
         return response
 
-    body = {
-        "requests": plan["requests"],
-        "writeControl": {
-            "writeMode": "SUGGEST",
-            "requiredRevisionId": expected_revision,
-        },
-    }
-    try:
-        result = client.batch_update(document_id, body)
-    except GoogleDocsError:
-        views = _stable_views(client, document_id)
-        candidates = _new_suggestion_ids(plan, views)
-        verification = _verify_views(plan, views, candidates)
-        verification["recovered_after_ambiguous_transport"] = True
-        response = _successful_apply_response(
-            resource, plan_sha256, idempotency_key, expected_revision,
-            str(views["inline"]["revisionId"]), verification, run_id,
+    pending_written = False
+
+    def mark_pending() -> None:
+        nonlocal pending_written
+        boundary_views = _stable_views(client, document_id)
+        if not _views_match_plan_baseline(plan, boundary_views):
+            raise RuntimeError(
+                "document changed at the governed browser mutation boundary; no edit was sent"
+            )
+        write_private_json(
+            journal_path,
+            {
+                "status": "pending",
+                "plan_sha256": plan_sha256,
+                "resource": resource,
+                "expected_revision": expected_revision,
+                "idempotency_key_sha256": text_hash(idempotency_key),
+            },
         )
-        write_private_json(journal_path, {"plan_sha256": plan_sha256, "resource": resource, "response": response})
-        return response
-    write_control = result.get("writeControl")
-    if not isinstance(write_control, dict) or write_control.get("writeMode") != "SUGGEST":
-        raise RuntimeError("Google did not confirm suggest-mode execution")
-    if result.get("commentUpdateState") != "ALL_SAVED":
-        raise RuntimeError(
-            f"Google did not save all tracked-change threads: {result.get('commentUpdateState', 'missing state')}"
-        )
-    created_ids: set[str] = set()
-    suggestion_responses = result.get("suggestionResponses", [])
-    if isinstance(suggestion_responses, list):
-        for suggestion_response in suggestion_responses:
-            if isinstance(suggestion_response, dict):
-                values = suggestion_response.get("createdSuggestionIds", [])
-                if isinstance(values, list):
-                    created_ids.update(str(value) for value in values if isinstance(value, str))
-    views = _stable_views(client, document_id)
-    verification = _verify_views(plan, views, created_ids)
-    verification["comment_update_state"] = "ALL_SAVED"
+        pending_written = True
+
+    browser_result = (browser or BrowserSuggestionDriver()).apply(
+        document_id,
+        list(plan["edits"]),
+        mark_pending,
+    )
+    if not pending_written:
+        raise RuntimeError("browser driver returned without crossing the governed mutation boundary")
+    if not isinstance(browser_result, dict) or browser_result.get("mode_verified") is not True:
+        raise RuntimeError("browser driver did not confirm Suggesting mode")
+    views, verification = _wait_for_browser_verification(client, document_id, plan)
+    verification["write_transport"] = "browser-suggesting-ui"
+    verification["browser_mode_verified"] = True
     response = _successful_apply_response(
         resource, plan_sha256, idempotency_key, expected_revision,
         str(views["inline"]["revisionId"]), verification, run_id,
@@ -476,11 +528,19 @@ def self_test() -> dict[str, Any]:
         "self-test",
         "ok",
         "synthetic-self-test",
-        summary={"utf16_indexes": True, "tracked_changes_required": True},
+        summary={
+            "utf16_indexes": True,
+            "tracked_changes_required": True,
+            "write_transport": "browser-suggesting-ui",
+        },
     )
 
 
-def execute(request: dict[str, Any], client: GoogleDocsClient | None = None) -> dict[str, Any]:
+def execute(
+    request: dict[str, Any],
+    client: GoogleDocsClient | None = None,
+    browser: BrowserSuggestionDriver | Any | None = None,
+) -> dict[str, Any]:
     operation = request.get("operation")
     try:
         if operation == "self-test":
@@ -491,7 +551,7 @@ def execute(request: dict[str, Any], client: GoogleDocsClient | None = None) -> 
         if operation == "plan":
             return plan_suggestions(request, active_client)
         if operation == "apply":
-            return apply_suggestions(request, active_client)
+            return apply_suggestions(request, active_client, browser)
         if operation == "verify":
             return verify_receipt(request, active_client)
         return _error(str(operation), "unsupported operation")

@@ -9,7 +9,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from google_docs_adapter.storage import load_json, sha256_file, write_private_json
+from google_docs_adapter.storage import load_json, sha256_file, write_private_json  # noqa: E402
 
 
 def main() -> int:
@@ -21,8 +21,10 @@ def main() -> int:
     args = parser.parse_args()
     plan_path = Path(args.plan).expanduser().resolve(strict=True)
     plan = load_json(plan_path, "suggestion plan")
-    if plan.get("schema") != "google-docs-suggestion-plan/v1":
-        raise SystemExit("not a google-docs-suggestion-plan/v1 plan")
+    if plan.get("schema") != "google-docs-suggestion-plan/v2":
+        raise SystemExit("not a google-docs-suggestion-plan/v2 plan")
+    if plan.get("write_transport") != "browser-suggesting-ui":
+        raise SystemExit("plan does not authorize browser-suggesting-ui")
     value = {
         "protocol": "llm-wiki-adapter/v1",
         "adapter_id": "google-docs-editing",

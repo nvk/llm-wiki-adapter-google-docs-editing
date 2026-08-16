@@ -21,6 +21,7 @@ from google_docs_adapter.auth import (
     install_client_config,
 )
 from google_docs_adapter.auth_web import create_local_auth_server
+from google_docs_adapter.browser import BrowserSuggestionDriver, browser_profile_path, document_url
 from google_docs_adapter.document import tab_text_indexes
 from google_docs_adapter.operations import execute
 from google_docs_adapter.storage import sha256_file, write_private_json
@@ -95,6 +96,22 @@ class FakeClient:
                 {"createdSuggestionIds": ["suggestion-insert"]},
             ],
             "commentUpdateState": "ALL_SAVED",
+        }
+
+
+class FakeBrowser:
+    def __init__(self, client: FakeClient) -> None:
+        self.client = client
+        self.calls: list[tuple[str, list[dict]]] = []
+
+    def apply(self, document_id: str, edits: list[dict], before_mutation: object) -> dict:
+        self.calls.append((document_id, edits))
+        before_mutation()
+        self.client.applied = True
+        return {
+            "transport": "browser-suggesting-ui",
+            "mode_verified": True,
+            "edit_count": len(edits),
         }
 
 
@@ -268,6 +285,73 @@ class AdapterTests(unittest.TestCase):
         index = tab_text_indexes(value)["tab-1"]
         self.assertEqual(index.locate("🌎")[2:], (3, 5))
 
+    def test_browser_profile_is_external_and_document_url_preserves_tab(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "state"
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(state)},
+                clear=False,
+            ):
+                self.assertEqual(
+                    browser_profile_path(),
+                    state.resolve(strict=False) / "browser-profile",
+                )
+        self.assertEqual(
+            document_url("SyntheticDocument123", "t.0"),
+            "https://docs.google.com/document/d/SyntheticDocument123/edit?tab=t.0",
+        )
+
+    def test_browser_replace_confirms_exact_match_before_mutation(self) -> None:
+        driver = BrowserSuggestionDriver(Path("/synthetic/browser-profile"))
+        page = mock.MagicMock()
+        dialog = mock.MagicMock()
+        find_input = mock.MagicMock()
+        replace_input = mock.MagicMock()
+        match_case = mock.MagicMock()
+        option = mock.MagicMock()
+        replace_button = mock.MagicMock()
+        find_input.count.return_value = 1
+        replace_input.count.return_value = 1
+        match_case.first.is_checked.return_value = False
+        option.first.is_checked.return_value = False
+        dialog.inner_text.return_value = "Find and replace\n1 of 1\nReplace"
+
+        def locate(selector: str) -> object:
+            return {
+                "input.docs-findandreplacedialog-find-input": find_input,
+                "input.docs-findandreplacedialog-replace-input": replace_input,
+                ".docs-findandreplacedialog-replace-button": replace_button,
+            }[selector]
+
+        def by_role(role: str, name: object = None) -> object:
+            if role == "checkbox" and "Match case" in str(name):
+                return match_case
+            if role == "checkbox":
+                return option
+            if role == "button":
+                return replace_button
+            raise AssertionError(role)
+
+        dialog.locator.side_effect = locate
+        dialog.get_by_role.side_effect = by_role
+        before_click = mock.Mock()
+        with mock.patch.object(driver, "_open_find_replace", return_value=dialog), mock.patch.object(
+            driver,
+            "_visible",
+            side_effect=lambda locator: locator in {match_case, replace_button},
+        ):
+            driver._replace_unique(
+                page,
+                {"find": "Synthetic old", "replace": "Synthetic new"},
+                before_click,
+            )
+        match_case.first.check.assert_called_once_with()
+        find_input.fill.assert_called_once_with("Synthetic old")
+        replace_input.fill.assert_called_once_with("Synthetic new")
+        before_click.assert_called_once_with()
+        replace_button.first.click.assert_called_once_with()
+
     def test_apply_request_helper_runs_from_outside_repository(self) -> None:
         repository = Path(__file__).resolve().parents[1]
         helper = repository / "scripts" / "make_apply_request.py"
@@ -276,7 +360,8 @@ class AdapterTests(unittest.TestCase):
             plan = root / "plan.json"
             request = root / "input" / "apply.json"
             write_private_json(plan, {
-                "schema": "google-docs-suggestion-plan/v1",
+                "schema": "google-docs-suggestion-plan/v2",
+                "write_transport": "browser-suggesting-ui",
                 "document_resource": RESOURCE,
                 "revision_id": "synthetic-revision",
             })
@@ -311,6 +396,7 @@ class AdapterTests(unittest.TestCase):
                 "edits": [{"tab_id": "tab-1", "find": "beta", "replace": "delta"}],
             })
             client = FakeClient()
+            browser = FakeBrowser(client)
             plan_response = execute({
                 "operation": "plan",
                 "arguments": {"document_resource": RESOURCE, "edit_spec": str(edit_spec)},
@@ -320,11 +406,9 @@ class AdapterTests(unittest.TestCase):
             plan = output / "plan" / "plan.json"
             value = json.loads(plan.read_text())
             self.assertEqual(value["revision_id"], "revision-1")
-            self.assertEqual(value["requests"][0]["deleteContentRange"]["range"], {
-                "startIndex": 7,
-                "endIndex": 11,
-                "tabId": "tab-1",
-            })
+            self.assertEqual(value["edits"][0]["start_index"], 7)
+            self.assertEqual(value["edits"][0]["end_index"], 11)
+            self.assertNotIn("requests", value)
             plan_sha = sha256_file(plan)
             apply_request = {
                 "operation": "apply",
@@ -337,15 +421,20 @@ class AdapterTests(unittest.TestCase):
                 },
             }
             with mock.patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(state)}):
-                apply_response = execute(apply_request, client)
-                replay_response = execute(apply_request, client)
+                apply_response = execute(apply_request, client, browser)
+                replay_response = execute(apply_request, client, browser)
             self.assertEqual(apply_response["status"], "ok")
             self.assertEqual(replay_response, apply_response)
-            self.assertEqual(len(client.batch_calls), 1)
+            self.assertEqual(client.batch_calls, [])
+            self.assertEqual(len(browser.calls), 1)
             receipt = apply_response["remote_receipt"]
             self.assertEqual(receipt["status"], "verified")
-            self.assertEqual(receipt["verification"]["comment_update_state"], "ALL_SAVED")
             self.assertEqual(receipt["verification"]["suggestion_count"], 2)
+            self.assertEqual(
+                receipt["verification"]["write_transport"],
+                "browser-suggesting-ui",
+            )
+            self.assertTrue(receipt["verification"]["browser_mode_verified"])
             receipt_path = output / "receipt.json"
             write_private_json(receipt_path, apply_response)
             verify_response = execute({
@@ -356,18 +445,10 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(verify_response["status"], "ok")
             self.assertTrue(verify_response["summary"]["verified"])
 
-    def test_missing_preview_confirmation_fails_before_mutation(self) -> None:
-        class UnsupportedPreviewClient(FakeClient):
-            def get_document(
-                self,
-                document_id: str,
-                mode: str,
-                comments_view_mode: str | None = None,
-            ) -> dict:
-                value = super().get_document(document_id, mode)
-                if comments_view_mode is not None:
-                    self.preview_checked = True
-                return value
+    def test_browser_failure_before_mutation_can_retry(self) -> None:
+        class UnauthenticatedBrowser:
+            def apply(self, _document_id: str, _edits: list[dict], _before_mutation: object) -> dict:
+                raise RuntimeError("editor did not become ready; no edit was sent")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -376,7 +457,7 @@ class AdapterTests(unittest.TestCase):
                 "schema": "google-docs-edit-spec/v1",
                 "edits": [{"tab_id": "tab-1", "find": "beta", "replace": "delta"}],
             })
-            client = UnsupportedPreviewClient()
+            client = FakeClient()
             plan_response = execute({
                 "operation": "plan",
                 "arguments": {"document_resource": RESOURCE, "edit_spec": str(spec)},
@@ -394,13 +475,13 @@ class AdapterTests(unittest.TestCase):
                 },
             }
             with mock.patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")}):
-                response = execute(request, client)
+                response = execute(request, client, UnauthenticatedBrowser())
+                retry = execute(request, client, FakeBrowser(client))
             self.assertEqual(response["status"], "error")
-            self.assertIn("did not confirm", response["errors"][0])
+            self.assertIn("did not become ready", response["errors"][0])
             self.assertIn("no edit was sent", response["errors"][0])
-            self.assertTrue(client.preview_checked)
             self.assertEqual(client.batch_calls, [])
-            self.assertFalse(client.applied)
+            self.assertEqual(retry["status"], "ok")
 
     def test_plan_rejects_target_with_existing_suggestion(self) -> None:
         class SuggestedClient(FakeClient):
@@ -420,14 +501,42 @@ class AdapterTests(unittest.TestCase):
                 "output_dir": str(root / "output"),
             }, SuggestedClient())
             self.assertEqual(response["status"], "error")
-            self.assertIn("overlaps an unresolved", response["errors"][0])
+            self.assertIn("no unresolved existing suggestions", response["errors"][0])
 
-    def test_failed_comment_state_never_verifies(self) -> None:
-        class FailedThreadsClient(FakeClient):
-            def batch_update(self, document_id: str, body: dict) -> dict:
-                value = super().batch_update(document_id, body)
-                value["commentUpdateState"] = "ALL_FAILED_UNKNOWN_REASON"
-                return value
+    def test_pending_partial_browser_write_refuses_duplicate_retry(self) -> None:
+        class PartialClient(FakeClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.partial = False
+
+            def get_document(
+                self,
+                _document_id: str,
+                mode: str,
+                comments_view_mode: str | None = None,
+            ) -> dict:
+                if not self.partial:
+                    return super().get_document(_document_id, mode, comments_view_mode)
+                if mode == "PREVIEW_WITHOUT_SUGGESTIONS":
+                    return document("Alpha beta gamma.\n", "revision-2")
+                if mode == "PREVIEW_SUGGESTIONS_ACCEPTED":
+                    return document("Alpha epsilon gamma.\n", "revision-2")
+                return document(
+                    "Alpha epsilon gamma.\n",
+                    "revision-2",
+                    ["partial-suggestion"],
+                )
+
+        class PartialBrowser:
+            def __init__(self, client: PartialClient) -> None:
+                self.client = client
+                self.calls = 0
+
+            def apply(self, _document_id: str, _edits: list[dict], before_mutation: object) -> dict:
+                self.calls += 1
+                before_mutation()
+                self.client.partial = True
+                raise RuntimeError("synthetic browser interrupted after first suggestion")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -436,7 +545,8 @@ class AdapterTests(unittest.TestCase):
                 "schema": "google-docs-edit-spec/v1",
                 "edits": [{"tab_id": "tab-1", "find": "beta", "replace": "delta"}],
             })
-            client = FailedThreadsClient()
+            client = PartialClient()
+            browser = PartialBrowser(client)
             plan_response = execute({
                 "operation": "plan",
                 "arguments": {"document_resource": RESOURCE, "edit_spec": str(spec)},
@@ -454,9 +564,13 @@ class AdapterTests(unittest.TestCase):
                 },
             }
             with mock.patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")}):
-                response = execute(request, client)
+                response = execute(request, client, browser)
+                replay = execute(request, client, browser)
             self.assertEqual(response["status"], "error")
-            self.assertIn("did not save all", response["errors"][0])
+            self.assertIn("interrupted", response["errors"][0])
+            self.assertEqual(replay["status"], "error")
+            self.assertIn("pending or partial", replay["errors"][0])
+            self.assertEqual(browser.calls, 1)
 
 
 if __name__ == "__main__":

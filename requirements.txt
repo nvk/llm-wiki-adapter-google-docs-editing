@@ -1,1 +1,1 @@
-# Runtime is Python standard-library only.
+playwright==1.58.0
