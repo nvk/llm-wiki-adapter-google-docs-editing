@@ -7,7 +7,7 @@ verifying the suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.7.7`
+- Version: `0.7.8`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, pairing tokens, plans, receipts, and journals remain in external
@@ -185,6 +185,9 @@ refocus retry when Docs moves focus while opening the dialog.
 Opening the dialog itself is also verified: a failed menu click falls back to
 the documented shortcut and then to keyboard activation of the semantic menu
 item rather than waiting on an action that did not take effect.
+After filling Find, the extension uses the dialog's native Tab order when the
+accessibility tree confirms that field still has focus; this avoids Docs
+redirecting a semantic click away from the Replace field.
 
 Changing from v0.5's browser driver to the v0.6 extension changes the plan
 schema and transport. Old `google-docs-suggestion-plan/v2` plans must be

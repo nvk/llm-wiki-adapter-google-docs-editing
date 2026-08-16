@@ -376,6 +376,14 @@ function axChecked(node) {
   return checked.value.value === true || checked.value.value === "true";
 }
 
+function axFocused(node) {
+  const focused = Array.isArray(node && node.properties)
+    ? node.properties.find((property) => property.name === "focused")
+    : null;
+  if (!focused || !focused.value) return false;
+  return focused.value.value === true || focused.value.value === "true";
+}
+
 async function findReplaceAXHasUniqueMatch(tabId) {
   const nodes = await accessibilityNodes(tabId);
   return nodes.some((node) => /\b1\s+of\s+1\b/i.test(
@@ -770,6 +778,20 @@ async function focusFindReplaceAXInput(tabId, kind) {
   return node ? focusAXNode(tabId, node) : false;
 }
 
+async function focusReplaceFromFindInput(tabId) {
+  const controls = await findReplaceAXState(tabId);
+  if (!controls.findInput || !controls.replaceInput) {
+    return false;
+  }
+  await dispatchShortcut(tabId, "Tab", "Tab", 0);
+  await sleep(200);
+  const updated = await findReplaceAXState(tabId);
+  if (updated.replaceInput && axFocused(updated.replaceInput)) return true;
+  return Boolean(await evaluate(tabId, findReplaceContextExpression(`
+    return document.activeElement === replaceInput;
+  `)));
+}
+
 async function findReplaceAXInputEquals(tabId, kind, expected) {
   const controls = await findReplaceAXState(tabId);
   const node = kind === "find" ? controls.findInput : controls.replaceInput;
@@ -777,8 +799,10 @@ async function findReplaceAXInputEquals(tabId, kind, expected) {
 }
 
 async function fillFindReplaceInput(tabId, kind, text) {
-  const axFocused = await focusFindReplaceAXInput(tabId, kind);
-  if (!axFocused) {
+  const focused = kind === "replace" && await focusReplaceFromFindInput(tabId)
+    ? true
+    : await focusFindReplaceAXInput(tabId, kind);
+  if (!focused) {
     const field = kind === "find" ? "findInput" : "replaceInput";
     const focused = await evaluate(tabId, findReplaceContextExpression(`
       const element = ${field};
@@ -789,6 +813,7 @@ async function fillFindReplaceInput(tabId, kind, text) {
       throw new Error("A Google Docs Find and replace input is unavailable.");
     }
   }
+  await sleep(150);
   const platform = String(await evaluate(tabId, "navigator.platform || ''"));
   const modifiers = platform.toLowerCase().includes("mac") ? 4 : 2;
   await dispatchShortcut(tabId, "a", "KeyA", modifiers);
