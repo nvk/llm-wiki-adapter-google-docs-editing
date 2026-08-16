@@ -7,7 +7,7 @@ verifying the suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.7.1`
+- Version: `0.7.2`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, pairing tokens, plans, receipts, and journals remain in external
@@ -36,7 +36,8 @@ Every successful `apply`:
 3. confirms the planned Docs revision and accepted/rejected projections;
 4. sends one in-memory job over a paired, bearer-authenticated loopback bridge;
 5. is discovered automatically by a scoped Docs-tab poller or 30-second alarm;
-6. requires the exact approved document to be open in Chrome;
+6. requires the exact approved document to be the active tab in the most
+   recently focused normal Chrome window;
 7. proves **Suggesting** mode before the first replacement and after each one;
 8. records a private pending journal immediately before the first UI mutation;
 9. discovers new suggestion IDs through Docs API read-back; and
@@ -156,10 +157,12 @@ Start the exact approved run:
   --json
 ```
 
-While it waits, keep the exact Google Doc open in normal Chrome. The paired
-extension discovers the approved job and creates the suggestions without a
-second extension interaction. The complete receipt stays private; terminal
-JSON remains content-free and identifier-free.
+While it waits, keep the exact Google Doc active in the normal Chrome window
+you most recently focused. The paired extension discovers the approved job and
+creates the suggestions without a second extension interaction. It will not
+fall back to another window or background tab containing the same document.
+The complete receipt stays private; terminal JSON remains content-free and
+identifier-free.
 
 The extension discovers the current Find-and-replace dialog by semantic field
 and control names rather than depending on one Google Docs CSS class. It falls
@@ -189,4 +192,5 @@ header/footer edits, named ranges, or tab mutations.
 - [Chrome Alarms API](https://developer.chrome.com/docs/extensions/reference/api/alarms)
 - [Extension service-worker lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle)
 - [Chrome extension cross-origin requests](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
+- [Chrome Windows API](https://developer.chrome.com/docs/extensions/reference/api/windows)
 - [Google Docs keyboard shortcuts](https://support.google.com/docs/answer/179738)

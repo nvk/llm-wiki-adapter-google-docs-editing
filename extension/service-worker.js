@@ -134,17 +134,29 @@ function documentTabIdFromUrl(rawUrl) {
   }
 }
 
-async function matchingDocumentTab(documentId, preferredTabId = null) {
-  const tabs = await chrome.tabs.query({ url: "https://docs.google.com/document/*" });
+async function focusedDocumentTab(documentId) {
+  const [tabs, focusedWindow] = await Promise.all([
+    chrome.tabs.query({ url: "https://docs.google.com/document/*" }),
+    chrome.windows.getLastFocused({ windowTypes: ["normal"] }),
+  ]);
+  if (!focusedWindow || typeof focusedWindow.id !== "number") {
+    return null;
+  }
   const matches = tabs.filter(
     (tab) => typeof tab.id === "number" && documentIdFromUrl(tab.url || "") === documentId,
   );
-  return (
-    matches.find((tab) => tab.id === preferredTabId) ||
-    matches.find((tab) => tab.active) ||
-    matches[0] ||
-    null
-  );
+  return matches.find(
+    (tab) => tab.windowId === focusedWindow.id && tab.active,
+  ) || null;
+}
+
+async function assertFocusedDocumentTab(tabId, documentId) {
+  const tab = await focusedDocumentTab(documentId);
+  if (!tab || tab.id !== tabId) {
+    throw new Error(
+      "Keep the approved Google Doc active in the most recently focused normal Chrome window.",
+    );
+  }
 }
 
 function debuggee(tabId) {
@@ -545,7 +557,7 @@ async function configureFindOptions(tabId) {
   }
 }
 
-async function replaceUnique(tabId, edit, jobId, firstMutation) {
+async function replaceUnique(tabId, documentId, edit, jobId, firstMutation) {
   await openFindReplace(tabId);
   await configureFindOptions(tabId);
   await fillFindReplaceInput(tabId, "find", edit.find);
@@ -558,6 +570,7 @@ async function replaceUnique(tabId, edit, jobId, firstMutation) {
     8000,
   );
   if (firstMutation) {
+    await assertFocusedDocumentTab(tabId, documentId);
     const boundary = await bridgeFetch("/v1/before-mutation", {
       method: "POST",
       body: { job_id: jobId },
@@ -597,6 +610,7 @@ async function executeJob(job, tab) {
   let completed = 0;
   let modeVerified = false;
   try {
+    await assertFocusedDocumentTab(tabId, job.document_id);
     await chrome.debugger.attach(debuggee(tabId), "1.3");
     attached = true;
     await command(tabId, "Runtime.enable");
@@ -610,7 +624,7 @@ async function executeJob(job, tab) {
       }
       await ensureSuggesting(tabId);
       modeVerified = true;
-      await replaceUnique(tabId, edit, job.job_id, !mutationStarted);
+      await replaceUnique(tabId, job.document_id, edit, job.job_id, !mutationStarted);
       mutationStarted = true;
       completed += 1;
       await ensureSuggesting(tabId);
@@ -643,7 +657,7 @@ async function executeJob(job, tab) {
   }
 }
 
-async function attemptAutomaticJob(preferredTabId = null) {
+async function attemptAutomaticJob() {
   if (automaticRun) {
     return automaticRun;
   }
@@ -654,7 +668,7 @@ async function attemptAutomaticJob(preferredTabId = null) {
     } catch (_error) {
       return { state: "idle" };
     }
-    const tab = await matchingDocumentTab(job.document_id, preferredTabId);
+    const tab = await focusedDocumentTab(job.document_id);
     if (!tab) {
       return { state: "waiting-for-document" };
     }
@@ -678,17 +692,14 @@ async function handleMessage(message) {
     case "pair":
       return pair(message);
     case "auto-poll":
-      return attemptAutomaticJob(message.preferredTabId || null);
+      return attemptAutomaticJob();
     default:
       throw new Error("Unknown extension request.");
   }
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  const value = message && message.type === "auto-poll"
-    ? { ...message, preferredTabId: sender.tab && sender.tab.id }
-    : message;
-  handleMessage(value)
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  handleMessage(message)
     .then((value) => sendResponse({ ok: true, value }))
     .catch((error) => sendResponse({
       ok: false,

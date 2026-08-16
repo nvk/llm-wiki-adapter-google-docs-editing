@@ -312,6 +312,9 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("No extension click is required", sidepanel)
         self.assertIn("findReplaceContextExpression", worker)
         self.assertIn("findReplaceMenuItemExpression", worker)
+        self.assertIn("focusedDocumentTab", worker)
+        self.assertIn('windowTypes: ["normal"]', worker)
+        self.assertNotIn("matches[0]", worker)
         self.assertNotIn('visibleElementExpression(".docs-findandreplacedialog")', worker)
         self.assertNotIn("<all_urls>", json.dumps(manifest))
 
