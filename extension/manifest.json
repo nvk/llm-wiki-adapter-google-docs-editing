@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "LLM Wiki Google Docs Suggestions",
-  "description": "Apply explicitly approved llm-wiki plans as Google Docs suggestions in the active document.",
-  "version": "0.6.1",
-  "minimum_chrome_version": "116",
+  "description": "Automatically apply explicitly approved llm-wiki plans as suggestions in their exact open Google Doc.",
+  "version": "0.7.0",
+  "minimum_chrome_version": "120",
   "permissions": [
-    "activeTab",
+    "alarms",
     "debugger",
     "sidePanel",
     "storage"
@@ -17,6 +17,13 @@
   "background": {
     "service_worker": "service-worker.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["https://docs.google.com/document/*"],
+      "js": ["poller.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
     "default_title": "LLM Wiki Google Docs Suggestions"
   },

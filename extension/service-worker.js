@@ -1,13 +1,19 @@
 const BRIDGE_PROTOCOL = "llm-wiki-google-docs-extension/v1";
 const DEFAULT_PORT = 17843;
+const POLL_ALARM = "approved-edit-poll";
+let automaticRun = null;
 
-chrome.runtime.onInstalled.addListener(async () => {
+async function configureExtension() {
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-});
+  const alarm = await chrome.alarms.get(POLL_ALARM);
+  if (!alarm) {
+    await chrome.alarms.create(POLL_ALARM, { periodInMinutes: 0.5 });
+  }
+}
 
-chrome.runtime.onStartup.addListener(async () => {
-  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-});
+chrome.runtime.onInstalled.addListener(configureExtension);
+chrome.runtime.onStartup.addListener(configureExtension);
+configureExtension().catch(() => {});
 
 function assertPort(value) {
   const port = Number(value);
@@ -128,13 +134,17 @@ function documentTabIdFromUrl(rawUrl) {
   }
 }
 
-async function activeDocumentTab(documentId) {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
-  if (!tab || typeof tab.id !== "number" || documentIdFromUrl(tab.url || "") !== documentId) {
-    throw new Error("Open the exact approved Google Doc in the active tab before applying.");
-  }
-  return tab;
+async function matchingDocumentTab(documentId, preferredTabId = null) {
+  const tabs = await chrome.tabs.query({ url: "https://docs.google.com/document/*" });
+  const matches = tabs.filter(
+    (tab) => typeof tab.id === "number" && documentIdFromUrl(tab.url || "") === documentId,
+  );
+  return (
+    matches.find((tab) => tab.id === preferredTabId) ||
+    matches.find((tab) => tab.active) ||
+    matches[0] ||
+    null
+  );
 }
 
 function debuggee(tabId) {
@@ -203,6 +213,18 @@ async function clickSelector(tabId, selector) {
   });
 }
 
+async function clickPoint(tabId, point) {
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    throw new Error("A required Google Docs control is unavailable.");
+  }
+  await command(tabId, "Input.dispatchMouseEvent", {
+    type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1,
+  });
+  await command(tabId, "Input.dispatchMouseEvent", {
+    type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1,
+  });
+}
+
 async function clickNamedControl(tabId, role, exactName, rootSelector = "body") {
   const expression = `(() => {
     const root = document.querySelector(${JSON.stringify(rootSelector)});
@@ -232,40 +254,104 @@ async function clickNamedControl(tabId, role, exactName, rootSelector = "body") 
   });
 }
 
+function modeControlExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const label = (element) => [
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-tooltip"),
+      element.getAttribute("title"),
+      element.textContent,
+    ].filter(Boolean).join(" ").trim().toLowerCase();
+    const exact = document.querySelector("#docs-mode-switcher-select");
+    let element = visible(exact) ? exact : null;
+    if (!element) {
+      const candidates = Array.from(document.querySelectorAll(
+        '[role="button"],[role="combobox"],[aria-haspopup="menu"],[aria-label],[data-tooltip],[title]'
+      )).filter((candidate) => {
+        if (!visible(candidate)) return false;
+        const role = candidate.getAttribute("role") || "";
+        const text = label(candidate);
+        return !["menuitem", "option"].includes(role) &&
+          text.length < 120 && /\\b(editing|suggesting|viewing)\\b/.test(text);
+      });
+      candidates.sort((left, right) => {
+        const score = (candidate) => {
+          const text = label(candidate);
+          return (/mode/.test(text) ? 20 : 0) +
+            (candidate.hasAttribute("aria-haspopup") ? 10 : 0) +
+            (candidate.getBoundingClientRect().top < 350 ? 5 : 0);
+        };
+        return score(right) - score(left);
+      });
+      element = candidates[0] || null;
+    }
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    return { text: label(element), x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`;
+}
+
+function suggestingOptionExpression() {
+  return `(() => {
+    const visible = (element) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    };
+    const label = (element) => [
+      element.getAttribute("aria-label"), element.getAttribute("data-tooltip"), element.textContent,
+    ].filter(Boolean).join(" ").trim().toLowerCase();
+    const exact = document.querySelector("#docs-mode-switcher-suggesting");
+    const element = visible(exact) ? exact : Array.from(document.querySelectorAll(
+      '[role="menuitem"],[role="option"]'
+    )).find((candidate) => visible(candidate) && /^suggesting\\b/.test(label(candidate)));
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`;
+}
+
+async function modeControl(tabId) {
+  return evaluate(tabId, modeControlExpression());
+}
+
 async function waitForEditor(tabId) {
   await waitFor(
-    async () => Boolean(await evaluate(tabId, `(() => {
-      if (!location.href.startsWith("https://docs.google.com/document/d/")) return false;
-      const mode = document.querySelector("#docs-mode-switcher-select");
-      if (!mode) return false;
-      const rect = mode.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    })()`)),
-    "The Google Docs editor did not become ready.",
+    async () => Boolean(await modeControl(tabId)),
+    "The Google Docs editing-mode control did not become ready.",
     30000,
   );
 }
 
-async function modeText(tabId) {
-  return String(await evaluate(tabId, `(() => {
-    const element = document.querySelector("#docs-mode-switcher-select");
-    if (!element) return "";
-    return [element.getAttribute("aria-label"), element.getAttribute("data-tooltip"), element.getAttribute("title"), element.textContent]
-      .filter(Boolean).join(" ").toLowerCase();
-  })()`));
-}
-
 async function ensureSuggesting(tabId) {
-  if (!(await modeText(tabId)).includes("suggest")) {
-    await clickSelector(tabId, "#docs-mode-switcher-select");
+  let mode = await modeControl(tabId);
+  if (!mode) {
+    throw new Error("The Google Docs editing-mode control is unavailable.");
+  }
+  if (!mode.text.includes("suggest")) {
+    await clickPoint(tabId, mode);
+    let option = null;
     await waitFor(
-      async () => Boolean(await evaluate(tabId, visibleElementExpression("#docs-mode-switcher-suggesting"))),
+      async () => {
+        option = await evaluate(tabId, suggestingOptionExpression());
+        return Boolean(option);
+      },
       "Suggesting mode is not available for this account or document.",
     );
-    await clickSelector(tabId, "#docs-mode-switcher-suggesting");
+    await clickPoint(tabId, option);
   }
   await waitFor(
-    async () => (await modeText(tabId)).includes("suggest"),
+    async () => {
+      mode = await modeControl(tabId);
+      return Boolean(mode && mode.text.includes("suggest"));
+    },
     "Google Docs did not confirm Suggesting mode.",
   );
 }
@@ -402,8 +488,7 @@ async function navigateToTab(tabId, documentId, documentTabId) {
   await waitForEditor(tabId);
 }
 
-async function executeJob(job) {
-  const tab = await activeDocumentTab(job.document_id);
+async function executeJob(job, tab) {
   const tabId = tab.id;
   let attached = false;
   let mutationStarted = false;
@@ -456,17 +541,30 @@ async function executeJob(job) {
   }
 }
 
-async function applyCurrentJob(expectedPlanHash) {
-  const job = await getJob();
-  if (job.plan_sha256 !== expectedPlanHash) {
-    throw new Error("The pending approved-plan hash changed; check the job again.");
+async function attemptAutomaticJob(preferredTabId = null) {
+  if (automaticRun) {
+    return automaticRun;
   }
-  const result = await executeJob(job);
-  await bridgeFetch("/v1/result", { method: "POST", body: result });
-  if (result.status !== "ok") {
-    throw new Error(result.error || "Google Docs suggestion operation failed.");
+  automaticRun = (async () => {
+    let job;
+    try {
+      job = await getJob();
+    } catch (_error) {
+      return { state: "idle" };
+    }
+    const tab = await matchingDocumentTab(job.document_id, preferredTabId);
+    if (!tab) {
+      return { state: "waiting-for-document" };
+    }
+    const result = await executeJob(job, tab);
+    await bridgeFetch("/v1/result", { method: "POST", body: result });
+    return { state: result.status, editCount: result.edit_count };
+  })();
+  try {
+    return await automaticRun;
+  } finally {
+    automaticRun = null;
   }
-  return { applied: true, editCount: result.edit_count, planSha256: job.plan_sha256 };
 }
 
 async function handleMessage(message) {
@@ -477,19 +575,18 @@ async function handleMessage(message) {
     }
     case "pair":
       return pair(message);
-    case "check-job": {
-      const job = await getJob();
-      return { available: true, planSha256: job.plan_sha256, editCount: job.edits.length };
-    }
-    case "apply-job":
-      return applyCurrentJob(String(message.planSha256 || ""));
+    case "auto-poll":
+      return attemptAutomaticJob(message.preferredTabId || null);
     default:
       throw new Error("Unknown extension request.");
   }
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  handleMessage(message)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const value = message && message.type === "auto-poll"
+    ? { ...message, preferredTabId: sender.tab && sender.tab.id }
+    : message;
+  handleMessage(value)
     .then((value) => sendResponse({ ok: true, value }))
     .catch((error) => sendResponse({
       ok: false,
@@ -497,3 +594,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }));
   return true;
 });
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === POLL_ALARM) {
+    attemptAutomaticJob().catch(() => {});
+  }
+});
+
+setTimeout(() => attemptAutomaticJob().catch(() => {}), 1000);

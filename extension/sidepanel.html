@@ -11,7 +11,7 @@
       <header>
         <p class="eyebrow">LLM WIKI</p>
         <h1>Google Docs suggestions</h1>
-        <p class="lede">Applies only a locally approved, revision-locked plan in the active document.</p>
+        <p class="lede">Automatically applies only a locally approved, revision-locked plan to its exact document.</p>
       </header>
 
       <section id="pair-section" class="card">
@@ -29,15 +29,8 @@
           <span class="dot" aria-hidden="true"></span>
           <span>Paired to local adapter</span>
         </div>
-        <button id="check" class="secondary">Check for approved edit</button>
-        <div id="job" hidden>
-          <dl>
-            <div><dt>Approved plan</dt><dd id="plan-hash"></dd></div>
-            <div><dt>Exact replacements</dt><dd id="edit-count"></dd></div>
-          </dl>
-          <p class="warning">Keep the exact approved Google Doc active. Chrome will show that this extension is debugging the tab while it applies suggestions.</p>
-          <button id="apply">Apply as suggestions</button>
-        </div>
+        <h2 class="automatic-title">Automatic execution enabled</h2>
+        <p class="warning">After llm-wiki receives the exact plan-hash approval, the extension finds the matching open document and creates the suggestions. No extension click is required.</p>
       </section>
 
       <p id="status" role="status" aria-live="polite"></p>

@@ -4,23 +4,23 @@ This private repository contains tool code only. Never commit document content,
 document identifiers, OAuth credentials, pairing tokens, edit plans, API
 responses, receipts, journals, screenshots, or generated results.
 
-## Two independent approvals
+## Approval and automatic execution
 
 An apply requires the exact llm-wiki plan hash, expected revision, stable
-idempotency key, and exact registered remote resource. The extension then
-requires a user click beside the active document. Neither approval can broaden
-the plan: the adapter sends only the plan's exact replacements and the
-extension does not accept caller-supplied browser programs.
+idempotency key, and exact registered remote resource. That plan-hash approval
+is the write authorization. The extension discovers the waiting job
+automatically and cannot broaden it: the adapter sends only the plan's exact
+replacements and never accepts caller-supplied browser programs.
 
 ## Browser boundary
 
 The adapter never launches Chrome, reads a Chrome profile, handles Google login
 credentials, or enables a remote-debugging port. The installed Manifest V3
 extension operates in normal Chrome and attaches `chrome.debugger` only to the
-active, exact approved Docs tab for the duration of one user-approved job. It
+exact approved Docs tab for the duration of one approved job. It
 detaches in `finally` on success or failure.
 
-Permissions are limited to `activeTab`, `debugger`, `sidePanel`, and `storage`.
+Permissions are limited to `alarms`, `debugger`, `sidePanel`, and `storage`.
 Host permissions are limited to `https://docs.google.com/*` and
 `http://127.0.0.1/*`; `<all_urls>` is forbidden. The extension contains no
 remote scripts and renders bridge values with `textContent`, never `innerHTML`.

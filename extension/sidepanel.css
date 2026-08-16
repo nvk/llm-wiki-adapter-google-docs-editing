@@ -93,6 +93,7 @@ dl div { border-top: 1px solid var(--line); padding: 10px 0; }
 dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
 dd { margin: 4px 0 0; font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .warning { color: var(--muted); font-size: 12px; }
+.automatic-title { margin-top: 18px; }
 #status { min-height: 20px; margin: 14px 3px 0; font-size: 13px; }
 #status.success { color: var(--accent); }
 #status.error { color: var(--danger); }

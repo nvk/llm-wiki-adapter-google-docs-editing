@@ -7,7 +7,7 @@ verifying the suggestions through Google Docs API read-back.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing`
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.6.1`
+- Version: `0.7.0`
 
 The repository contains tools only. Document text, identifiers, OAuth
 credentials, pairing tokens, plans, receipts, and journals remain in external
@@ -16,13 +16,14 @@ runtime directories.
 ## Why an extension
 
 Google rejects automated browser sign-in, while a second Chrome instance can
-also conflict with an outer OS sandbox. v0.6 does not launch or sign in to
+also conflict with an outer OS sandbox. v0.7 does not launch or sign in to
 Chrome. Its Manifest V3 extension runs in the user's existing normal Chrome
-profile and acts only after the user opens its side panel and presses **Apply
-as suggestions**.
+profile. After the user approves the exact plan hash through llm-wiki, the
+extension automatically finds the matching open document and applies the plan.
 
-The extension uses Chrome's side-panel API for approval and the debugger API
-for trusted mouse and keyboard input in the active Google Docs tab. It has no
+The extension uses Chrome's side-panel API for one-time pairing and the
+debugger API for trusted mouse and keyboard input in the exact Google Docs tab.
+It has no
 `<all_urls>` permission. Persistent host access is limited to
 `docs.google.com` and the loopback bridge at `127.0.0.1`.
 
@@ -34,8 +35,8 @@ Every successful `apply`:
 2. requires llm-wiki's explicit `--approve-remote-write` hash;
 3. confirms the planned Docs revision and accepted/rejected projections;
 4. sends one in-memory job over a paired, bearer-authenticated loopback bridge;
-5. requires a second explicit click in the extension side panel;
-6. requires the exact approved document to be the active tab;
+5. is discovered automatically by a scoped Docs-tab poller or 30-second alarm;
+6. requires the exact approved document to be open in Chrome;
 7. proves **Suggesting** mode before the first replacement and after each one;
 8. records a private pending journal immediately before the first UI mutation;
 9. discovers new suggestion IDs through Docs API read-back; and
@@ -155,9 +156,9 @@ Start the exact approved run:
   --json
 ```
 
-While it waits, open the exact Google Doc in normal Chrome, open the extension
-side panel, choose **Check for approved edit**, compare the displayed hash, and
-choose **Apply as suggestions**. The complete receipt stays private; terminal
+While it waits, keep the exact Google Doc open in normal Chrome. The paired
+extension discovers the approved job and creates the suggestions without a
+second extension interaction. The complete receipt stays private; terminal
 JSON remains content-free and identifier-free.
 
 Changing from v0.5's browser driver to the v0.6 extension changes the plan
@@ -172,7 +173,7 @@ replanned and explicitly re-approved as v3; their old hashes cannot be reused.
 - `apply`: extension-driven tracked suggestions plus API verification.
 - `verify`: re-check a prior verified receipt.
 
-v0.6 supports exact unique body-text replacements, including multiple tabs. It
+v0.7 supports exact unique body-text replacements, including multiple tabs. It
 does not generate arbitrary browser actions, raw Docs `batchUpdate` bodies,
 header/footer edits, named ranges, or tab mutations.
 
@@ -180,5 +181,6 @@ header/footer edits, named ranges, or tab mutations.
 
 - [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 - [Chrome Debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
+- [Chrome Alarms API](https://developer.chrome.com/docs/extensions/reference/api/alarms)
+- [Extension service-worker lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle)
 - [Chrome extension cross-origin requests](https://developer.chrome.com/docs/extensions/develop/concepts/network-requests)
-- [Chrome activeTab permission](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab)

@@ -296,10 +296,19 @@ class AdapterTests(unittest.TestCase):
         manifest = json.loads((extension_root() / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["manifest_version"], 3)
         self.assertIn("debugger", manifest["permissions"])
+        self.assertIn("alarms", manifest["permissions"])
+        self.assertNotIn("activeTab", manifest["permissions"])
         self.assertEqual(
             manifest["host_permissions"],
             ["http://127.0.0.1/*", "https://docs.google.com/*"],
         )
+        self.assertEqual(
+            manifest["content_scripts"][0]["matches"],
+            ["https://docs.google.com/document/*"],
+        )
+        sidepanel = (extension_root() / "sidepanel.html").read_text(encoding="utf-8")
+        self.assertNotIn("Apply as suggestions", sidepanel)
+        self.assertIn("No extension click is required", sidepanel)
         self.assertNotIn("<all_urls>", json.dumps(manifest))
 
     def test_extension_pairing_requires_chrome_origin_and_writes_private_state(self) -> None:
