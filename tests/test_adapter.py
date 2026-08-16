@@ -363,7 +363,11 @@ class AdapterTests(unittest.TestCase):
                 def emulate_extension() -> None:
                     try:
                         headers = {"Origin": origin, "Authorization": f"Bearer {token}"}
-                        job_request = urllib.request.Request(base_url + "/v1/job", headers=headers)
+                        # Chrome extension GET fetches omit the Origin header.
+                        job_request = urllib.request.Request(
+                            base_url + "/v1/job",
+                            headers={"Authorization": f"Bearer {token}"},
+                        )
                         with urllib.request.urlopen(job_request, timeout=5) as response:
                             job = json.loads(response.read())
                         self.assertEqual(job["protocol"], BRIDGE_PROTOCOL)

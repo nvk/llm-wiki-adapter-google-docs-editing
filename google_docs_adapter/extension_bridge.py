@@ -154,11 +154,18 @@ class _BridgeHandler(http.server.BaseHTTPRequestHandler):
             raise ExtensionBridgeError("request body must be a JSON object")
         return value
 
-    def _authorized_job(self) -> JobSession:
+    def _authorized_job(self, *, allow_missing_origin: bool = False) -> JobSession:
         session = self.server.session
         if not isinstance(session, JobSession):
             raise ExtensionBridgeError("no edit job is active")
-        if not hmac.compare_digest(self._origin(), session.extension_origin):
+        raw_origin = self.headers.get("Origin")
+        if raw_origin is None:
+            # Chrome omits Origin on extension GET requests. Those requests are
+            # read-only and still require the unguessable paired bearer token.
+            # State-changing POSTs continue to require the exact paired origin.
+            if not allow_missing_origin:
+                raise ExtensionBridgeError("request did not include the paired extension origin")
+        elif not hmac.compare_digest(_extension_origin(raw_origin), session.extension_origin):
             raise ExtensionBridgeError("extension origin does not match the paired extension")
         authorization = self.headers.get("Authorization", "")
         expected = f"Bearer {session.token}"
@@ -183,7 +190,7 @@ class _BridgeHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         try:
-            session = self._authorized_job()
+            session = self._authorized_job(allow_missing_origin=True)
             if self.path == "/v1/status":
                 self._send(200, {
                     "protocol": BRIDGE_PROTOCOL,

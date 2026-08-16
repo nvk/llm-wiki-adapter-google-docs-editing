@@ -30,8 +30,10 @@ remote scripts and renders bridge values with `textContent`, never `innerHTML`.
 Pairing and edit servers bind only to `127.0.0.1`. Pairing uses an eight-digit
 single-session code with a five-attempt limit. Successful pairing creates a
 random bearer token and binds it to the exact 32-character Chrome extension
-origin. Both the token and origin are required for every job request, mutation
-boundary, and result. Responses are `no-store`; request bodies are capped.
+origin. Chrome omits `Origin` on extension GET requests, so read-only job fetches
+authenticate with the bearer token; both the token and exact paired origin are
+required for mutation-boundary and result POSTs. Responses are `no-store` and
+request bodies are capped.
 
 The token is the only persistent extension value besides the bridge port. The
 extension does not persist the document ID, plan hash, find text, replacement
