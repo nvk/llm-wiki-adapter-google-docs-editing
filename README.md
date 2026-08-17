@@ -19,7 +19,7 @@ development path.
 The targeted adapter owns Google Docs semantics: exact replacement and append
 planning, Suggesting-mode preparation, unique-match checks, revision
 fingerprints, idempotency, and verification. The separate private
-`llm-wiki-adapter-browser-execution` supplies only the shared typed executor.
+`llm-wiki-chrome` supplies only the shared typed executor.
 It cannot accept natural-language tasks or arbitrary JavaScript.
 
 Each extension click adds an ephemeral collaboration grant to a bounded
@@ -39,9 +39,9 @@ install its native host:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install --no-deps --no-build-isolation \
-  /absolute/private/llm-wiki-adapter-browser-execution
-/absolute/private/llm-wiki-adapter-browser-execution/.venv/bin/python \
-  /absolute/private/llm-wiki-adapter-browser-execution/adapter.py browser-install
+  /absolute/private/llm-wiki-chrome
+/absolute/private/llm-wiki-chrome/.venv/bin/python \
+  /absolute/private/llm-wiki-chrome/adapter.py browser-install
 ```
 
 Use a normal local package install rather than an editable install: cloud-backed
