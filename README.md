@@ -62,11 +62,14 @@ remote capability:
   --read-root /absolute/private/google-docs-output \
   --write-root /absolute/private/google-docs-output \
   --remote-resource 'browser-collaboration:active-tab' \
-  --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR
+  --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR \
+  --env LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET
 ```
 
 This is adapter trust, not per-document authorization. Additional Docs need no
-registration change.
+registration change. When the shared executor uses a custom private socket,
+export `LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET` before adapter runs; the
+registry passes only its value and never stores it.
 
 ## Collaborate on a document
 

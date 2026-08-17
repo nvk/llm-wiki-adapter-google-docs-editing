@@ -274,7 +274,10 @@ def _mode_actions() -> list[dict[str, Any]]:
             "op": "first_success",
             "branches": [
                 [
-                    {"op": "dispatch_key_chord", "keys": ["platform-primary", "shift", "x"]},
+                    {
+                        "op": "dispatch_key_chord",
+                        "keys": ["platform-primary", "alt", "shift", "x"],
+                    },
                     {
                         "op": "wait_ax",
                         "locator": {"role": "button", "name_contains": "suggesting"},
