@@ -66,6 +66,16 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             {"op": "dispatch_key_chord", "keys": ["platform-primary", "shift", "x"]},
             flat,
         )
+        self.assertIn(
+            {
+                "op": "click_ax",
+                "locator": {
+                    "roles": ["menuitem", "menuitemradio"],
+                    "name_contains": "find and replace",
+                },
+            },
+            flat,
+        )
         boundary = operations.index("before_mutation")
         self.assertNotIn("first_success", operations[boundary + 1:])
         self.assertEqual(len(flat), program["limits"]["max_actions"])

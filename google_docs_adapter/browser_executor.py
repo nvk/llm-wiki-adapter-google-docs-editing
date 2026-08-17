@@ -312,10 +312,14 @@ def _dialog_actions() -> list[dict[str, Any]]:
                     {"op": "click_dom", "locator": {"selector": "#docs-edit-menu", "visible": True}},
                     {
                         "op": "click_ax",
-                        "locator": {"roles": ["menuitem", "menuitemradio"], "name": "Find and replace"},
+                        "locator": {
+                            "roles": ["menuitem", "menuitemradio"],
+                            "name_contains": "find and replace",
+                        },
                     },
                 ],
                 [
+                    {"op": "dispatch_key_chord", "keys": ["escape"]},
                     {"op": "dispatch_key_chord", "keys": ["platform-primary", "shift", "h"]},
                     {
                         "op": "wait_ax",
