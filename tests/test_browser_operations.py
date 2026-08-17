@@ -113,6 +113,10 @@ class BrowserOperationsTests(unittest.TestCase):
                 manifest["operations"][name]["remote_resource_arguments"],
                 ["collaboration_resource"],
             )
+        self.assertEqual(
+            manifest["operations"]["verify"]["read_arguments"],
+            ["receipt", "plan"],
+        )
 
     def test_browser_only_inspect_plan_apply_and_verify(self) -> None:
         browser = FakeBrowser()
@@ -173,6 +177,7 @@ class BrowserOperationsTests(unittest.TestCase):
             verified = execute(self.request("verify", root / "verify", {
                 "collaboration_resource": COLLABORATION_RESOURCE,
                 "receipt": str(receipt),
+                "plan": str(plan_path),
             }), browser)
             self.assertEqual(verified["status"], "ok")
             self.assertTrue(verified["summary"]["verified"])
@@ -257,6 +262,62 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(second["status"], "error")
             self.assertIn("refusing a duplicate", second["errors"][0])
             self.assertEqual(browser.mutations, 1)
+
+    def test_append_plan_needs_no_existing_source_text(self) -> None:
+        browser = FakeBrowser()
+        browser.after = [*AFTER, row("paragraph", "Synthetic appended suggestion.")]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"append": "Synthetic appended suggestion."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            self.assertEqual(planned["status"], "ok")
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            remote_write = {
+                "plan_sha256": sha256_file(plan_path),
+                "idempotency_key": "synthetic-append-key",
+                "expected_revision": plan["revision_id"],
+            }
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")},
+            ):
+                applied = execute(self.request("apply", root / "apply", {
+                    "collaboration_resource": COLLABORATION_RESOURCE,
+                    "plan": str(plan_path),
+                }, remote_write), browser)
+            self.assertEqual(applied["status"], "ok")
+            self.assertTrue(applied["remote_receipt"]["verification"]["planned_text_observed_after_mutation"])
+            self.assertFalse(
+                applied["remote_receipt"]["verification"][
+                    "unique_find_preconditions_asserted_before_mutation"
+                ]
+            )
+
+            receipt = root / "receipt.json"
+            write_private_json(receipt, applied)
+            browser.baseline = [
+                row("document", "Synthetic document with volatile UI state"),
+                row("button", "Suggesting mode"),
+                row("paragraph", "Synthetic appended suggestion."),
+            ]
+            verified = execute(self.request("verify", root / "verify", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "receipt": str(receipt),
+                "plan": str(plan_path),
+            }), browser)
+            self.assertEqual(verified["status"], "ok")
+            report = json.loads((root / "verify" / "verification.json").read_text())
+            self.assertTrue(report["planned_text_matches"])
+            self.assertFalse(report["receipt_projection_matches"])
 
 
 if __name__ == "__main__":

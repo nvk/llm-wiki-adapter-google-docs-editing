@@ -216,6 +216,41 @@ def _ready_actions() -> list[dict[str, Any]]:
             },
             "timeout_ms": 30_000,
         },
+        {
+            "op": "first_success",
+            "branches": [
+                [
+                    {
+                        "op": "assert_ax",
+                        "locator": {
+                            "role": "link",
+                            "name_contains": "turn on screen reader support",
+                        },
+                    },
+                    {
+                        "op": "dispatch_key_chord",
+                        "keys": ["platform-primary", "alt", "z"],
+                    },
+                    {
+                        "op": "wait_ax",
+                        "locator": {
+                            "role": "button",
+                            "name_contains_any": ["editing", "suggesting", "viewing"],
+                        },
+                        "timeout_ms": 5_000,
+                    },
+                ],
+                [
+                    {
+                        "op": "assert_ax",
+                        "locator": {
+                            "role": "button",
+                            "name_contains_any": ["editing", "suggesting", "viewing"],
+                        },
+                    },
+                ],
+            ],
+        },
         {"op": "dispatch_key_chord", "keys": ["escape"]},
         {
             "op": "wait_ax",
@@ -374,19 +409,34 @@ def compile_suggestion_program(
 
     slots = ["baseline.sha256"]
     private_values = {"baseline.sha256": revision_sha256}
+    append_indexes: list[int] = []
     for index, edit in enumerate(edits):
         if not isinstance(edit, dict):
             raise ValueError("every edit must be an object")
+        prefix = f"edit.{index:03d}"
+        if set(edit) == {"append"}:
+            append = edit.get("append")
+            if not isinstance(append, str) or not append:
+                raise ValueError("append edits require non-empty text")
+            if len(append.encode("utf-8")) > MAX_PRIVATE_VALUE_BYTES:
+                raise ValueError("an edit value is too large for the shared executor")
+            append_indexes.append(index)
+            slots.append(f"{prefix}.append")
+            private_values[f"{prefix}.append"] = append
+            continue
+        if set(edit) != {"find", "replace"}:
+            raise ValueError("every edit must be one exact replacement or append")
         find = edit.get("find")
         replace = edit.get("replace")
         if not isinstance(find, str) or not find or not isinstance(replace, str) or replace == find:
-            raise ValueError("every edit requires different non-empty find and string replace values")
+            raise ValueError("every replacement requires different non-empty find and replace text")
         if any(len(value.encode("utf-8")) > MAX_PRIVATE_VALUE_BYTES for value in (find, replace)):
             raise ValueError("an edit value is too large for the shared executor")
-        prefix = f"edit.{index:03d}"
         slots.extend((f"{prefix}.find", f"{prefix}.replace"))
         private_values[f"{prefix}.find"] = find
         private_values[f"{prefix}.replace"] = replace
+    if append_indexes and (len(append_indexes) != 1 or len(edits) != 1):
+        raise ValueError("append plans must contain exactly one append edit")
 
     actions: list[dict[str, Any]] = [
         {"op": "open_or_focus_exact_url"},
@@ -401,13 +451,36 @@ def compile_suggestion_program(
             "max_items": SNAPSHOT_MAX_ITEMS,
         },
         *_mode_actions(),
-        *_dialog_actions(),
     ]
-    for index in range(len(edits)):
-        actions.extend(_preflight_edit_actions(index))
+    if append_indexes:
+        actions.extend([
+            {
+                "op": "wait_dom",
+                "locator": {"selector": "#docs-editor", "visible": True},
+                "timeout_ms": 5_000,
+            },
+            {"op": "click_dom", "locator": {"selector": "#docs-editor", "visible": True}},
+            {"op": "dispatch_key_chord", "keys": ["platform-primary", "arrow-down"]},
+            {"op": "assert_ax", "locator": {"role": "button", "name_contains": "suggesting"}},
+        ])
+    else:
+        actions.extend(_dialog_actions())
+        for index in range(len(edits)):
+            actions.extend(_preflight_edit_actions(index))
     actions.append({"op": "before_mutation"})
-    for index in range(len(edits)):
-        actions.extend(_apply_edit_actions(index))
+    if append_indexes:
+        index = append_indexes[0]
+        actions.extend([
+            {"op": "dispatch_key_chord", "keys": ["enter"]},
+            {
+                "op": "insert_private_text",
+                "slot": f"edit.{index:03d}.append",
+                "replace_all": False,
+            },
+        ])
+    else:
+        for index in range(len(edits)):
+            actions.extend(_apply_edit_actions(index))
     actions.extend([
         {"op": "assert_ax", "locator": {"role": "button", "name_contains": "suggesting"}},
         {"op": "dispatch_key_chord", "keys": ["escape"]},

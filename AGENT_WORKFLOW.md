@@ -27,8 +27,9 @@ adapter selects the requested Google document by its exact document identity.
   registered private roots or memory.
 - A URL or collaboration click alone is not permission to invent changes. The
   user must give a concrete edit instruction.
-- Only exact find/replace suggestions are accepted. No arbitrary JavaScript,
-  browser program, Docs API mutation, or silent direct edit is available.
+- Only exact find/replace suggestions or one bounded end-of-document append are
+  accepted. No arbitrary JavaScript, browser program, Docs API mutation, or
+  silent direct edit is available.
 - Every write requires the exact approved plan hash, browser revision
   fingerprint, stable idempotency key, one governed mutation boundary, and
   browser read-back verification.
@@ -48,9 +49,9 @@ adapter selects the requested Google document by its exact document identity.
 1. Run `inspect` with the static collaboration resource and the requested URL.
    The private artifact contains the bounded browser-visible AX projection and
    its revision fingerprint.
-2. Build the smallest `google-docs-edit-spec/v1` exact-replacement spec. The
-   browser transport accepts `find` and `replace` only, with up to 15 additive
-   suggestions per plan.
+2. Build the smallest `google-docs-edit-spec/v1` plan: up to 15 non-overlapping
+   `find`/`replace` suggestions, or one `append` suggestion when no safe
+   non-overlapping source text exists.
 3. Run `plan`. It binds the plan to the selected collaboration ID, exact live
    URL, document ID, and revision fingerprint.
 4. Pass the plan's hash internally through `--approve-remote-write`, use a
@@ -58,13 +59,15 @@ adapter selects the requested Google document by its exact document identity.
    `expected_revision`. Never ask the user to copy an approval hash.
 5. Run `apply`. The shared executor re-hashes the AX projection inside Chrome
    before the governed boundary, enters Suggesting mode, preflights every find
-   as `1 of 1`, applies the replacements, proves Suggesting mode again, and
-   returns a private post-mutation projection.
-6. Treat success as verified only when the adapter observes every replacement
-   in browser read-back and emits a verified remote receipt. A pending journal
-   after a post-boundary failure blocks duplicate retries.
-7. `verify` may re-check that the same exposed document still matches the
-   receipt's post-write projection.
+   as `1 of 1` or positions an append at the exact document end, applies the
+   plan, proves Suggesting mode again, and returns a private post-mutation
+   projection.
+6. Treat success as verified only when the adapter observes every planned text
+   value in browser read-back and emits a verified remote receipt. A pending
+   journal after a post-boundary failure blocks duplicate retries.
+7. `verify` re-checks the exact exposed document against the private plan and
+   receipt. It tolerates volatile Docs UI projection changes only when every
+   planned text value remains browser-visible.
 
 Report content-free status and counts unless the user explicitly asks to see
 document text from the private inspection artifact.

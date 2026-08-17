@@ -1,8 +1,8 @@
 # Google Docs Editing Adapter
 
 Private, content-free llm-wiki tool for inspecting an explicitly exposed
-Google Doc, planning exact replacements, applying them as tracked suggestions,
-and verifying the browser-visible result.
+Google Doc, planning exact replacements or a bounded append, applying them as
+tracked suggestions, and verifying the browser-visible result.
 
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (private)
 - Manifest ID: `google-docs-editing`
@@ -16,9 +16,9 @@ development path.
 
 ## Architecture
 
-The targeted adapter owns Google Docs semantics: exact replacement planning,
-Suggesting-mode preparation, unique-match checks, revision fingerprints,
-idempotency, and verification. The separate private
+The targeted adapter owns Google Docs semantics: exact replacement and append
+planning, Suggesting-mode preparation, unique-match checks, revision
+fingerprints, idempotency, and verification. The separate private
 `llm-wiki-adapter-browser-execution` supplies only the shared typed executor.
 It cannot accept natural-language tasks or arbitrary JavaScript.
 
@@ -98,7 +98,7 @@ An inspect or plan request uses the static resource plus the expected URL:
 The example identifier is synthetic. Never commit a real URL, document ID,
 plan, receipt, or extracted projection.
 
-Edit specs are exact replacements only:
+Edit specs are either exact replacements:
 
 ```json
 {
@@ -109,13 +109,27 @@ Edit specs are exact replacements only:
 }
 ```
 
-Up to 15 non-overlapping find strings may be planned together. Before the first
+or one bounded append suggestion:
+
+```json
+{
+  "schema": "google-docs-edit-spec/v1",
+  "edits": [
+    {"append": "synthetic appended suggestion"}
+  ]
+}
+```
+
+Up to 15 non-overlapping find strings may be planned together, or one append
+may be planned alone. Before the first
 mutation, the extension recomputes the exact ordered accessibility projection
 and compares it to the private plan revision hash. It then preflights every find
 as `1 of 1`, enters Suggesting mode, crosses one governed mutation boundary,
 applies the batch, proves Suggesting mode again, and returns a private read-back
-projection. A verified receipt is emitted only when every replacement is
-browser-visible and the projection changed.
+projection. A verified receipt is emitted only when every planned text value is
+browser-visible and the projection changed. A later `verify` binds the same
+private plan to the receipt so volatile Docs chrome does not invalidate a
+still-visible suggestion.
 
 Use `scripts/make_apply_request.py` to build the governed apply request from the
 private plan, then run it through llm-wiki with the exact plan hash. The terminal
@@ -125,7 +139,8 @@ response stays content-free; complete artifacts and receipts remain private.
 
 - Google Docs only; the exact requested document must be in the bounded set of
   explicitly shared tabs.
-- Exact find/replace tracked suggestions; no free-form browser programs.
+- Exact find/replace or one end-of-document append suggestion; no free-form
+  browser programs.
 - Up to 15 edits per plan.
 - AX projection is the browser-owned revision model. It may fail closed when
   Google changes its accessibility surface or volatile UI changes the snapshot.

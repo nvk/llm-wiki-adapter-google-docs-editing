@@ -14,8 +14,9 @@ There are two separate gates:
    idempotency key.
 
 The click authorizes bounded collaboration with that page, not an invented
-edit or ambient browsing. The plan authorizes only its exact replacements. The
-stable registered remote resource remains `browser-collaboration:active-tab`;
+edit or ambient browsing. The plan authorizes only its exact replacements or
+one bounded append. The stable registered remote resource remains
+`browser-collaboration:active-tab`;
 the targeted adapter selects the exact requested document from the ephemeral
 workspace at runtime.
 
@@ -41,7 +42,7 @@ unique before authorization. Replace clicks happen only after Suggesting mode
 is asserted, and the mode is asserted again after the batch.
 
 A successful UI command is provisional. The adapter requires a private
-post-mutation projection, a changed revision hash, and visible replacement text
+post-mutation projection, a changed revision hash, and visible planned text
 for every planned edit before emitting a verified receipt. A journal written at
 the boundary blocks duplicate retry after a partial or unverified write.
 

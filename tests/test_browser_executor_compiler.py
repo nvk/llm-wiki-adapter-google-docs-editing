@@ -62,6 +62,13 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             },
             flat,
         )
+        self.assertIn(
+            {
+                "op": "dispatch_key_chord",
+                "keys": ["platform-primary", "alt", "z"],
+            },
+            flat,
+        )
         self.assertNotIn(
             {"op": "dispatch_key_chord", "keys": ["platform-primary", "shift", "x"]},
             flat,
@@ -151,6 +158,33 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         self.assertLess(lock, boundary)
         self.assertEqual(private_values["baseline.sha256"], "e" * 64)
         self.assertEqual(program["result"]["private_fields"], ["docs.after-ax"])
+
+    def test_compiler_supports_one_private_append_suggestion(self) -> None:
+        text = "Synthetic appended suggestion."
+        program, private_values = compile_suggestion_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [{"append": text}],
+            COLLABORATION,
+            "e" * 64,
+        )
+        encoded_program = json.dumps(program)
+        self.assertNotIn(text, encoded_program)
+        self.assertEqual(private_values["edit.000.append"], text)
+        operations = [action["op"] for action in flatten(program["actions"])]
+        boundary = operations.index("before_mutation")
+        self.assertIn("wait_dom", operations[:boundary])
+        self.assertIn("click_dom", operations[:boundary])
+        self.assertIn("insert_private_text", operations[boundary + 1:])
+        self.assertNotIn("focus_ax", operations)
+
+        with self.assertRaisesRegex(ValueError, "exactly one append"):
+            compile_suggestion_program(
+                DOCUMENT_ID,
+                PLAN_SHA256,
+                [{"append": "One"}, {"append": "Two"}],
+                COLLABORATION,
+            )
 
 
 if __name__ == "__main__":

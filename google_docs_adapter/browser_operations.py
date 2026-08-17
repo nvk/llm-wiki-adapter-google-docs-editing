@@ -175,8 +175,16 @@ def _validate_edit_spec(value: dict[str, Any]) -> list[dict[str, str]]:
     normalized: list[dict[str, str]] = []
     seen: set[str] = set()
     for edit in edits:
-        if not isinstance(edit, dict) or set(edit).difference({"find", "replace"}):
-            raise ValueError("browser edit entries accept only find and replace")
+        if not isinstance(edit, dict):
+            raise ValueError("browser edit entries must be objects")
+        if set(edit) == {"append"}:
+            append = edit.get("append")
+            if not isinstance(append, str) or not append:
+                raise ValueError("append edits require non-empty text")
+            normalized.append({"append": append})
+            continue
+        if set(edit) != {"find", "replace"}:
+            raise ValueError("browser edit entries accept an exact replacement or append")
         find = edit.get("find")
         replace = edit.get("replace")
         if not isinstance(find, str) or not find:
@@ -189,11 +197,21 @@ def _validate_edit_spec(value: dict[str, Any]) -> list[dict[str, str]]:
             raise ValueError("overlapping find text is not allowed in one suggestion plan")
         seen.add(find)
         normalized.append({"find": find, "replace": replace})
+    append_count = sum("append" in edit for edit in normalized)
+    if append_count and (append_count != 1 or len(normalized) != 1):
+        raise ValueError("append plans must contain exactly one append edit")
     return normalized
 
 
 def _fragment_contains(fragments: list[str], text: str) -> bool:
     return any(text in fragment for fragment in fragments)
+
+
+def _planned_text(edit: dict[str, Any]) -> str:
+    value = edit.get("replace", edit.get("append"))
+    if not isinstance(value, str) or not value:
+        raise ValueError("suggestion plan contains an invalid edit")
+    return value
 
 
 def plan_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[str, Any]:
@@ -202,7 +220,11 @@ def plan_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[st
     edit_spec = load_json(edit_spec_path, "edit specification")
     edits = _validate_edit_spec(edit_spec)
     _snapshot, revision, fragments = _run_inspection(browser, collaboration, document_id)
-    missing = [index + 1 for index, edit in enumerate(edits) if not _fragment_contains(fragments, edit["find"])]
+    missing = [
+        index + 1
+        for index, edit in enumerate(edits)
+        if "find" in edit and not _fragment_contains(fragments, edit["find"])
+    ]
     if missing:
         raise ValueError(
             "browser inspection could not find the requested source text for edit(s): "
@@ -309,7 +331,7 @@ def _verify_after_snapshot(
     missing = [
         index + 1
         for index, edit in enumerate(plan["edits"])
-        if not _fragment_contains(fragments, edit["replace"])
+        if not _fragment_contains(fragments, _planned_text(edit))
     ]
     if missing:
         raise RuntimeError(
@@ -320,8 +342,16 @@ def _verify_after_snapshot(
         "status": "verified",
         "write_transport": "shared-browser-executor-suggesting-ui",
         "suggesting_mode_asserted_before_and_after": True,
-        "unique_find_preconditions_asserted_before_mutation": True,
-        "replacement_text_observed_after_mutation": True,
+        "unique_find_preconditions_asserted_before_mutation": all(
+            "find" in edit for edit in plan["edits"]
+        ),
+        "append_position_precondition_asserted_before_mutation": all(
+            "append" in edit for edit in plan["edits"]
+        ),
+        "planned_text_observed_after_mutation": True,
+        "replacement_text_observed_after_mutation": all(
+            "replace" in edit for edit in plan["edits"]
+        ),
         "suggestion_count": len(plan["edits"]),
         "before_projection_sha256": plan["revision_id"],
         "after_projection_sha256": after_revision,
@@ -461,12 +491,24 @@ def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str,
         raise RuntimeError("the receipted Google Doc has an ambiguous collaboration grant")
     collaboration = matches[0]
     document_id = document_id_from_collaboration(collaboration)
-    snapshot, revision, _fragments = _run_inspection(browser, collaboration, document_id)
+    snapshot, revision, fragments = _run_inspection(browser, collaboration, document_id)
     target_matches = (
         sha256_bytes(collaboration["url"].encode("utf-8"))
         == previous.get("target_url_sha256")
     )
-    verified = target_matches and revision == remote_receipt.get("after_revision")
+    receipt_projection_matches = revision == remote_receipt.get("after_revision")
+    plan_path = Path(request["arguments"]["plan"]).resolve(strict=True)
+    if sha256_file(plan_path) != remote_receipt.get("plan_sha256"):
+        raise ValueError("verification plan does not match the remote receipt")
+    plan = load_json(plan_path, "suggestion plan")
+    target = plan.get("target")
+    if not isinstance(target, dict) or target.get("document_id") != document_id:
+        raise ValueError("verification plan does not belong to the exposed Google Doc")
+    planned_text_matches = all(
+        _fragment_contains(fragments, _planned_text(edit))
+        for edit in plan.get("edits", [])
+    )
+    verified = target_matches and planned_text_matches
     report = {
         "schema": "google-docs-browser-suggestion-verification/v1",
         "status": "verified" if verified else "drifted",
@@ -474,6 +516,8 @@ def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str,
         "receipt_sha256": sha256_file(receipt_path),
         "revision_id": revision,
         "target_matches": target_matches,
+        "receipt_projection_matches": receipt_projection_matches,
+        "planned_text_matches": planned_text_matches,
         "private_ax_node_count": len(snapshot),
     }
     output_path = Path(request["output_dir"]).resolve(strict=False) / "verification.json"

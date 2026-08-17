@@ -11,6 +11,7 @@
     "google-docs-multi-tab-exact-document-selection",
     "google-docs-browser-revision-lock",
     "google-docs-suggestion-planning",
+    "google-docs-append-suggestions",
     "google-docs-shared-browser-executor",
     "google-docs-tracked-changes",
     "google-docs-browser-readback-verification"
@@ -56,7 +57,7 @@
       "effects": ["remote-read", "remote-write"]
     },
     "verify": {
-      "read_arguments": ["receipt"],
+      "read_arguments": ["receipt", "plan"],
       "remote_resource_arguments": ["collaboration_resource"],
       "requires_output_dir": true,
       "effects": ["remote-read"]
