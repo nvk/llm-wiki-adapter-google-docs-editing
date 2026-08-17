@@ -40,17 +40,26 @@ Only transport/lifecycle mechanics and typed CDP primitives qualify. The
 Google-specific target parser, mode handling, Find-and-replace logic, recovery
 ordering, and mutation meaning remain provider-owned.
 
+## Compiler checkpoint
+
+The branch now includes an adapter-owned shadow compiler that turns up to 16
+provider-validated exact replacements into a signed shared-executor program.
+Find and replacement text remains in private slots, the plan hash and exact Doc
+path are bound into the program, all recovery branches precede the single
+mutation boundary, and later replacement clicks cannot fall back to another
+branch. The compiler does not cut over the production transport or authorize a
+live edit.
+
 ## Next development slice
 
-Create the private `llm-wiki-adapter-browser-execution` foundation with:
+Run the compiled program through the private
+`llm-wiki-adapter-browser-execution` branch in shadow mode with:
 
-1. a versioned job validator;
-2. canonical hashing and exact-target constraints;
-3. a private Unix-socket client and Native Messaging relay;
-4. a route-free content-free manifest;
-5. a shared extension shell with no provider logic; and
-6. negative tests that reject evaluation, mutation in read jobs, wrong origins,
-   unbounded actions, and content-bearing public results.
+1. the current plan/revision baseline re-read at the mutation challenge;
+2. no production transport switch in existing plans;
+3. synthetic single- and multi-edit parity checks;
+4. independent API read-back verification; and
+5. explicit cutover approval only after parity and rollback tests.
 
 Do not change the production Google Docs connector or its installed extension
-during this slice.
+during shadow compilation and tests.
