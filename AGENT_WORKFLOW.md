@@ -1,71 +1,70 @@
 # Google Docs editing agent workflow
 
-This guide is the provider-specific handoff for the registered
-`google-docs-editing` adapter. The public llm-wiki plugin should discover it
-through `adapter route`; it must not duplicate these instructions.
+This provider guide is owned by the private `google-docs-editing` adapter. The
+public llm-wiki plugin discovers it through `adapter route`; Google-specific
+steps do not belong in llm-wiki itself.
+
+## User flow
+
+1. The user opens each page they want to share in their normal signed-in Chrome.
+2. The user clicks **LLM Wiki Browser Executor** on each such tab. Every gesture
+   adds an ephemeral grant bound to the exact tab, URL, origin, and window. The
+   workspace is capped at 16 grants.
+3. The agent uses the private adapter. There is no Google OAuth, Picker,
+   per-document API grant, persistent host permission, or per-document
+   llm-wiki registration.
+
+The adapter and the shared browser executor are still installed and trusted
+once. Register only the stable capability
+`browser-collaboration:active-tab`; the historical capability name remains
+stable while its runtime workspace supplies explicitly shared tabs. The
+adapter selects the requested Google document by its exact document identity.
 
 ## Boundaries
 
-- This repository is a content-free tool. Keep document text, document IDs,
-  OAuth material, edit specs, plans, hashes, journals, receipts, and results in
-  the registered external data plane.
-- A document URL alone does not authorize invented edits. Ask for a concrete
-  instruction when it is missing or materially ambiguous.
-- A bounded imperative approves only the smallest faithful plan. Any additional
-  change needs a new instruction.
-- Every successful write must be a tracked suggestion with the approved plan
-  hash, expected revision, stable idempotency key, and independent verification.
-- Never fall back to a direct Docs API mutation or arbitrary browser automation.
+- The repository is a content-free tool. Runtime URLs, document IDs, text,
+  edit specs, plans, receipts, journals, and accessibility projections stay in
+  registered private roots or memory.
+- A URL or collaboration click alone is not permission to invent changes. The
+  user must give a concrete edit instruction.
+- Only exact find/replace suggestions are accepted. No arbitrary JavaScript,
+  browser program, Docs API mutation, or silent direct edit is available.
+- Every write requires the exact approved plan hash, browser revision
+  fingerprint, stable idempotency key, one governed mutation boundary, and
+  browser read-back verification.
 
-## Route handoff
+## Route and health
 
-1. Resolve the bundled `llm-wiki` CLI and keep the target URL private.
-2. Run `adapter show google-docs-editing` and `adapter doctor
-   google-docs-editing --json`. Do not continue through manifest drift or an
-   unhealthy handshake.
-3. Convert the target to its exact `google-docs:<document-id>` remote resource.
-   Check that identifier against the registration before any read or write.
-4. Registration and Google's per-file `drive.file` grant are separate. Run the
-   content-free provider probe from the registered adapter root:
-
-   ```bash
-   .venv/bin/python adapter.py auth-status --document '<document-url>'
-   ```
-
-5. If the exact remote resource is not registered, use the pinned
-   `auth --document '<document-url>'` flow, then re-register with `--replace`
-   while preserving every existing read root, write root, environment name,
-   and remote resource. If the resource is registered but the probe returns
-   `picker_required: true`, run the same pinned authorization flow without
-   asking for a second llm-wiki permission; the bounded edit already authorizes
-   this repair. The user still completes Google's unavoidable provider UI.
-   Preserve the refresh token and prior file grants, then rerun `auth-status`.
-   Never blind-retry an unprobed 404.
-6. For initial connector setup or diagnosis only, run `browser-status`. If the
-   native host is not installed, run `browser-install` and follow its one-time
-   unpacked-extension instructions. Normal edits require no extension click,
-   port, pairing code, side-panel action, active-tab preparation, or manually
-   opened dialog. Chrome must be running, signed in, and have the extension
-   enabled.
+1. Run `adapter route --intent edit --resource '<document-url>' --json`.
+2. Run `adapter doctor google-docs-editing --json` and stop on manifest drift.
+3. Confirm the requested Google document appears in the explicitly shared
+   workspace. The adapter selects and enforces the exact document again; the
+   currently active tab is not authoritative.
+4. If the document is not shared, tell the user only: open that exact Doc and
+   click the shared executor extension. Do not open OAuth or Picker.
 
 ## Governed edit
 
-1. Run `inspect` privately and build the smallest exact-replacement edit spec.
-2. Run `plan` against the required revision. Existing unresolved suggestions
-   elsewhere are part of the baseline and do not block a non-overlapping plan.
-   A target that overlaps suggested text fails only that plan. Pending or
-   partial writes remain protected by duplicate and idempotency checks.
-3. Hash the private plan and pass that same hash internally through
-   `--approve-remote-write`; never ask the user to copy or repeat it.
-4. Use a caller-stable idempotency key and the plan's expected revision. Write
-   the complete response receipt only under a registered private output root.
-5. Run `apply`. The native connector owns exact-document focus, Suggesting
-   mode, Find-and-replace activation, and multi-edit execution. A failure before
-   mutation is an adapter defect to diagnose or repair, not a reason to ask the
-   user to prepare browser UI.
-6. Run the separate `verify` operation against the verified receipt. UI
-   completion alone is never success. Report only content-free status and
-   counts unless the user explicitly requests document content.
+1. Run `inspect` with the static collaboration resource and the requested URL.
+   The private artifact contains the bounded browser-visible AX projection and
+   its revision fingerprint.
+2. Build the smallest `google-docs-edit-spec/v1` exact-replacement spec. The
+   browser transport accepts `find` and `replace` only, with up to 15 additive
+   suggestions per plan.
+3. Run `plan`. It binds the plan to the selected collaboration ID, exact live
+   URL, document ID, and revision fingerprint.
+4. Pass the plan's hash internally through `--approve-remote-write`, use a
+   caller-stable idempotency key, and pass the plan revision as
+   `expected_revision`. Never ask the user to copy an approval hash.
+5. Run `apply`. The shared executor re-hashes the AX projection inside Chrome
+   before the governed boundary, enters Suggesting mode, preflights every find
+   as `1 of 1`, applies the replacements, proves Suggesting mode again, and
+   returns a private post-mutation projection.
+6. Treat success as verified only when the adapter observes every replacement
+   in browser read-back and emits a verified remote receipt. A pending journal
+   after a post-boundary failure blocks duplicate retries.
+7. `verify` may re-check that the same exposed document still matches the
+   receipt's post-write projection.
 
-See `README.md` for setup commands, request examples, supported edit shape, and
-connector diagnostics.
+Report content-free status and counts unless the user explicitly asks to see
+document text from the private inspection artifact.

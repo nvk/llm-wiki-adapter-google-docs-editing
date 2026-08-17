@@ -60,7 +60,7 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         self.assertEqual(len(flat), program["limits"]["max_actions"])
 
     def test_compiler_caps_batch_and_private_value_sizes(self) -> None:
-        with self.assertRaisesRegex(ValueError, "1-16"):
+        with self.assertRaisesRegex(ValueError, f"1-{MAX_SHADOW_EDITS}"):
             compile_suggestion_program(
                 DOCUMENT_ID,
                 PLAN_SHA256,
@@ -114,6 +114,22 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
                 check=False,
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_compiler_locks_the_ax_revision_before_the_governed_boundary(self) -> None:
+        program, private_values = compile_suggestion_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [{"find": "Synthetic old", "replace": "Synthetic new"}],
+            COLLABORATION,
+            "e" * 64,
+        )
+        flat = flatten(program["actions"])
+        operations = [action["op"] for action in flat]
+        lock = operations.index("assert_ax_private_sha256")
+        boundary = operations.index("before_mutation")
+        self.assertLess(lock, boundary)
+        self.assertEqual(private_values["baseline.sha256"], "e" * 64)
+        self.assertEqual(program["result"]["private_fields"], ["docs.after-ax"])
 
 
 if __name__ == "__main__":

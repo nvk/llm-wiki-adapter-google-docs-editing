@@ -1,62 +1,58 @@
 # Security and content boundary
 
-This private repository contains tool code only. Never commit document content,
-document identifiers, OAuth credentials, edit plans, API responses, receipts,
-journals, screenshots, native messages, or generated results.
+This private repository contains tool code only. Never commit real document
+content, URLs, IDs, edit specs, plans, projections, receipts, journals,
+credentials, captures, or results.
 
-## Approval and automatic execution
+## Authorization
 
-An apply requires the exact llm-wiki plan hash, expected revision, stable
-idempotency key, and exact registered remote resource. That plan-hash approval
-is the write authorization. The extension receives only the plan's exact
-replacements and never accepts caller-supplied browser programs.
+There are two separate gates:
+
+1. each user extension click exposes one exact tab inside a bounded workspace;
+   and
+2. llm-wiki approves one exact plan hash, expected browser revision, and stable
+   idempotency key.
+
+The click authorizes bounded collaboration with that page, not an invented
+edit or ambient browsing. The plan authorizes only its exact replacements. The
+stable registered remote resource remains `browser-collaboration:active-tab`;
+the targeted adapter selects the exact requested document from the ephemeral
+workspace at runtime.
 
 ## Browser boundary
 
-The adapter never reads a Chrome profile, handles Google login credentials, or
-enables a remote-debugging port. The installed Manifest V3 extension operates
-in normal Chrome, opens or focuses only the exact approved Docs URL, and attaches
-`chrome.debugger` only to that tab for one job. It detaches in `finally`.
+The targeted adapter compiles a fixed Google Docs typed program for the shared
+executor. No arbitrary JavaScript, `Runtime.evaluate`, natural-language browser
+job, downloaded code, broad tab enumeration, or persistent host permission is
+accepted. The exact collaboration ID, URL, origin, path, and tab are checked by
+the executor before every action.
 
-Permissions are limited to `debugger`, `nativeMessaging`, `sidePanel`,
-and `storage`. Host permissions are limited to
-`https://docs.google.com/*`; `<all_urls>` and localhost hosts are forbidden. The
-extension contains no remote scripts and persists no document ID, plan hash,
-find text, replacement text, or result.
+Page text and accessibility projections are private results. They never appear
+in the extension panel, public terminal status, or repository. The extension
+stores only ephemeral collaboration state and never stores document content,
+plans, or receipts.
 
-## Native Messaging boundary
+## Revision and tracked-suggestion proof
 
-`browser-install` writes Chrome's user-level native-host manifest with one exact
-`allowed_origins` entry derived from the extension's committed public key. The
-host verifies that caller again before opening a mode-0600 Unix socket under a
-mode-0700 external state directory. There is no TCP listener, port, pairing code,
-or bearer token.
+Planning hashes the ordered, bounded accessibility projection. The mutation
+program recomputes that projection inside Chrome before the governed mutation
+boundary and fails closed on mismatch. All find strings are preflighted as
+unique before authorization. Replace clicks happen only after Suggesting mode
+is asserted, and the mode is asserted again after the batch.
 
-Chrome starts the host over stdio. The host relays bounded JSON messages between
-the connected extension and one same-user agent process at a time. It never logs
-or stores those messages. Native and socket messages are size-capped. A second
-concurrent edit is rejected.
+A successful UI command is provisional. The adapter requires a private
+post-mutation projection, a changed revision hash, and visible replacement text
+for every planned edit before emitting a verified receipt. A journal written at
+the boundary blocks duplicate retry after a partial or unverified write.
 
-The socket is local authentication by user and filesystem boundary, not an OS
-sandbox. A compromised process running as the same user is outside this
-adapter's threat boundary.
-
-## Tracked-suggestion proof
-
-The Docs API uses `drive.file` for revision-locked planning and three-projection
-read-back. Immediately before the first Replace click, the extension requests
-the adapter's governed mutation boundary. The adapter re-checks the revision,
-accepted and rejected projections, and baseline suggestion IDs, then writes a
-pending journal before authorizing the click.
-
-A successful UI report is provisional. The adapter accepts success only after
-new suggestion IDs appear, the rejected projection remains equal to the
-pre-write document, and the accepted projection equals the approved plan. A
-crash or partial write remains pending and blocks duplicate retry.
+This browser-only proof is intentionally weaker than first-party Docs API
+accepted/rejected projections and suggestion IDs. It trades that semantic depth
+for zero provider OAuth and zero per-document grants. Failures are reported
+honestly and never converted into direct edits.
 
 ## Threat boundary
 
-The extension is powerful while attached to an approved Docs tab, so install it
-only from this reviewed private tool repository. A compromised local account,
-compromised extension, malicious Chrome installation, or already-authorized
-Google session is outside the adapter's security boundary.
+The shared extension is powerful while attached to a user-exposed tab. Install
+it only from the reviewed private executor repository. A compromised local
+account, Chrome installation, extension, or already signed-in Google session is
+outside this adapter's threat boundary.
