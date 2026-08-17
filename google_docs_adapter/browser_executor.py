@@ -5,12 +5,13 @@ import hashlib
 import json
 import re
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 from .document import DOCUMENT_ID_RE
 
 BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1"
 DRIVER_ID = "google-docs-suggestions"
-DRIVER_VERSION = "shadow-1"
+DRIVER_VERSION = "collaboration-1"
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 MAX_SHADOW_EDITS = 16
 MAX_PRIVATE_VALUE_BYTES = 16_384
@@ -136,6 +137,7 @@ def compile_suggestion_program(
     document_id: str,
     plan_sha256: str,
     edits: list[dict[str, Any]],
+    collaboration: dict[str, str],
 ) -> tuple[dict[str, Any], dict[str, str]]:
     if not DOCUMENT_ID_RE.fullmatch(document_id):
         raise ValueError("document identifier is invalid")
@@ -143,6 +145,31 @@ def compile_suggestion_program(
         raise ValueError("plan_sha256 must be lowercase hexadecimal SHA-256")
     if not isinstance(edits, list) or not 1 <= len(edits) <= MAX_SHADOW_EDITS:
         raise ValueError(f"shared-executor shadow programs require 1-{MAX_SHADOW_EDITS} edits")
+    if not isinstance(collaboration, dict) or set(collaboration) != {
+        "collaboration_id", "url", "origin",
+    }:
+        raise ValueError("an exact active-tab collaboration is required")
+    collaboration_id = collaboration.get("collaboration_id")
+    target_url = collaboration.get("url")
+    target_origin = collaboration.get("origin")
+    if (
+        not isinstance(collaboration_id, str)
+        or not SHA256.fullmatch(collaboration_id)
+        or not isinstance(target_url, str)
+        or not isinstance(target_origin, str)
+    ):
+        raise ValueError("the active-tab collaboration is invalid")
+    parsed = urlsplit(target_url)
+    document_prefix = f"/document/d/{document_id}/"
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "docs.google.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.startswith(document_prefix)
+        or target_origin != "https://docs.google.com"
+    ):
+        raise ValueError("the active collaboration is not the requested Google document")
 
     slots: list[str] = []
     private_values: dict[str, str] = {}
@@ -177,7 +204,6 @@ def compile_suggestion_program(
         {"op": "detach_debugger"},
     ])
 
-    target_url = f"https://docs.google.com/document/d/{document_id}/edit"
     program: dict[str, Any] = {
         "protocol": BROWSER_PROTOCOL,
         "program_id": "google-docs-suggestions-v1",
@@ -187,8 +213,9 @@ def compile_suggestion_program(
         "capability": "mutation",
         "target": {
             "url": target_url,
-            "origin": "https://docs.google.com",
-            "path_prefixes": [f"/document/d/{document_id}/"],
+            "origin": target_origin,
+            "path_prefixes": [document_prefix],
+            "collaboration_id": collaboration_id,
         },
         "limits": {
             "timeout_ms": 120_000,

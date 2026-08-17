@@ -45,10 +45,12 @@ ordering, and mutation meaning remain provider-owned.
 The branch now includes an adapter-owned shadow compiler that turns up to 16
 provider-validated exact replacements into a signed shared-executor program.
 Find and replacement text remains in private slots, the plan hash and exact Doc
-path are bound into the program, all recovery branches precede the single
+path plus the click-created active-tab collaboration ID are bound into the program, all recovery branches precede the single
 mutation boundary, and later replacement clicks cannot fall back to another
-branch. The compiler does not cut over the production transport or authorize a
-live edit.
+branch. The shared extension now uses Chrome `activeTab` and no persistent host
+permissions, so a user can expose the currently open Doc without a per-document
+extension registration. The compiler does not cut over the production
+transport or authorize a live edit.
 
 ## Next development slice
 

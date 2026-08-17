@@ -17,6 +17,11 @@ from google_docs_adapter.browser_executor import (
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENT_ID = "SyntheticBrowserExecutorDocument123"
 PLAN_SHA256 = "c" * 64
+COLLABORATION = {
+    "collaboration_id": "d" * 64,
+    "url": f"https://docs.google.com/document/d/{DOCUMENT_ID}/edit?tab=t.0",
+    "origin": "https://docs.google.com",
+}
 
 
 def flatten(actions: list[dict]) -> list[dict]:
@@ -34,7 +39,9 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             {"find": "Synthetic old one", "replace": "Synthetic new one"},
             {"find": "Synthetic old two", "replace": "Synthetic new two"},
         ]
-        program, private_values = compile_suggestion_program(DOCUMENT_ID, PLAN_SHA256, edits)
+        program, private_values = compile_suggestion_program(
+            DOCUMENT_ID, PLAN_SHA256, edits, COLLABORATION,
+        )
         encoded_program = json.dumps(program)
         for edit in edits:
             self.assertNotIn(edit["find"], encoded_program)
@@ -58,12 +65,26 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
                 DOCUMENT_ID,
                 PLAN_SHA256,
                 [{"find": f"Synthetic {index}", "replace": "Replacement"} for index in range(MAX_SHADOW_EDITS + 1)],
+                COLLABORATION,
             )
         with self.assertRaisesRegex(ValueError, "too large"):
             compile_suggestion_program(
                 DOCUMENT_ID,
                 PLAN_SHA256,
                 [{"find": "x" * 16_385, "replace": "Synthetic"}],
+                COLLABORATION,
+            )
+
+        with self.assertRaisesRegex(ValueError, "requested Google document"):
+            compile_suggestion_program(
+                DOCUMENT_ID,
+                PLAN_SHA256,
+                [{"find": "Synthetic old", "replace": "Synthetic new"}],
+                {
+                    "collaboration_id": "d" * 64,
+                    "url": "https://example.invalid/private",
+                    "origin": "https://example.invalid",
+                },
             )
 
     @unittest.skipUnless(os.environ.get("LLM_WIKI_BROWSER_EXECUTOR_ROOT"), "shared executor source is not configured")
@@ -73,6 +94,7 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             DOCUMENT_ID,
             PLAN_SHA256,
             [{"find": "Synthetic old", "replace": "Synthetic new"}],
+            COLLABORATION,
         )
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "program.json"
