@@ -18,7 +18,7 @@ development path.
 
 The targeted adapter owns Google Docs semantics: exact replacement and append
 planning, Suggesting-mode preparation, unique-match checks, revision
-fingerprints, idempotency, and verification. The separate private
+fingerprints, idempotency, and verification. The separate public-source
 `llm-wiki-chrome` supplies only the shared typed executor.
 It cannot accept natural-language tasks or arbitrary JavaScript.
 
