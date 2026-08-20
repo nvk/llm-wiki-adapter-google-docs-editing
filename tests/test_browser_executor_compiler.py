@@ -143,20 +143,28 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_compiler_locks_the_ax_revision_before_the_governed_boundary(self) -> None:
+    def test_compiler_uses_stable_preflights_before_the_governed_boundary(self) -> None:
         program, private_values = compile_suggestion_program(
             DOCUMENT_ID,
             PLAN_SHA256,
             [{"find": "Synthetic old", "replace": "Synthetic new"}],
             COLLABORATION,
-            "e" * 64,
         )
         flat = flatten(program["actions"])
         operations = [action["op"] for action in flat]
-        lock = operations.index("assert_ax_private_sha256")
         boundary = operations.index("before_mutation")
-        self.assertLess(lock, boundary)
-        self.assertEqual(private_values["baseline.sha256"], "e" * 64)
+        self.assertNotIn("assert_ax_private_sha256", operations)
+        self.assertNotIn("baseline.sha256", private_values)
+        self.assertEqual(operations[:boundary].count("wait_ax_private_value"), 1)
+        self.assertEqual(operations[boundary + 1:].count("wait_ax_private_value"), 2)
+        for index, action in enumerate(flat):
+            if action["op"] == "insert_private_text":
+                self.assertEqual(flat[index + 1]["op"], "wait_ax_private_value")
+                self.assertEqual(flat[index + 1]["slot"], action["slot"])
+        self.assertIn(
+            {"op": "assert_ax", "locator": {"role": "statictext", "name": "1 of 1"}},
+            flat[:boundary],
+        )
         self.assertEqual(program["result"]["private_fields"], ["docs.after-ax"])
 
     def test_compiler_supports_one_private_append_suggestion(self) -> None:
@@ -166,7 +174,6 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             PLAN_SHA256,
             [{"append": text}],
             COLLABORATION,
-            "e" * 64,
         )
         encoded_program = json.dumps(program)
         self.assertNotIn(text, encoded_program)

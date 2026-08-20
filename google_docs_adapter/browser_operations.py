@@ -262,14 +262,14 @@ def plan_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[st
     )
 
 
-def _journal_path(idempotency_key: str) -> Path:
+def _journal_path(idempotency_key: str, plan_path: Path) -> Path:
     if not idempotency_key or len(idempotency_key) > 256:
         raise ValueError("remote_write idempotency_key must contain 1-256 characters")
     raw = os.environ.get("LLM_WIKI_GOOGLE_DOCS_STATE_DIR")
     root = (
         Path(raw).expanduser().resolve(strict=False)
         if raw
-        else Path.home() / ".local" / "state" / "llm-wiki" / "google-docs-editing"
+        else plan_path.parent / ".google-docs-state"
     )
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
@@ -391,9 +391,9 @@ def _successful_apply_response(
 
 
 def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[str, Any]:
-    plan, _plan_path, plan_sha256, expected_revision, idempotency_key = _validate_plan_request(request)
+    plan, plan_path, plan_sha256, expected_revision, idempotency_key = _validate_plan_request(request)
     resource = COLLABORATION_RESOURCE
-    journal_path = _journal_path(idempotency_key)
+    journal_path = _journal_path(idempotency_key, plan_path)
     run_id = sha256_bytes(idempotency_key.encode("utf-8"))[:24]
     if journal_path.is_file():
         stored = load_json(journal_path, "idempotency journal")
@@ -437,7 +437,6 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
         plan_sha256,
         list(plan["edits"]),
         collaboration,
-        expected_revision,
     )
     result = browser.run(
         program,
@@ -445,6 +444,12 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
         before_mutation=mark_pending,
     )
     if not pending_written:
+        error = result.get("error") if isinstance(result, dict) else None
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            raise RuntimeError(
+                "browser suggestion preflight failed before authorization; no edit was sent: "
+                + (error or "invalid executor result")
+            )
         raise RuntimeError("browser executor returned without crossing the governed mutation boundary")
     if not isinstance(result, dict) or result.get("status") != "ok":
         error = result.get("error") if isinstance(result, dict) else None

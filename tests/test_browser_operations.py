@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from google_docs_adapter import __version__
 from google_docs_adapter.browser_executor import snapshot_sha256
 from google_docs_adapter.browser_operations import COLLABORATION_RESOURCE, execute
 from google_docs_adapter.storage import sha256_file, write_private_json
@@ -70,7 +71,7 @@ class FakeBrowser:
             return {"status": "ok", "public": {}, "private": {"docs.ax": list(self.baseline)}}
         assert callable(before_mutation)
         assert private_values is not None
-        assert private_values["baseline.sha256"] == snapshot_sha256(self.baseline)
+        assert "baseline.sha256" not in private_values
         before_mutation()
         self.mutations += 1
         if self.fail_after_boundary:
@@ -105,6 +106,9 @@ class BrowserOperationsTests(unittest.TestCase):
     def test_manifest_uses_one_static_collaboration_capability_and_no_oauth(self) -> None:
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))
+        project = (root / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn(f'version = "{__version__}"', project)
+        self.assertEqual(manifest["version"], __version__)
         self.assertEqual(manifest["network"], "none")
         self.assertFalse(manifest["writes_wiki"])
         self.assertNotIn("oauth", json.dumps(manifest).lower())
@@ -229,6 +233,102 @@ class BrowserOperationsTests(unittest.TestCase):
             }), browser)
             self.assertEqual(wrong["status"], "error")
             self.assertIn("none of the explicitly shared tabs", wrong["errors"][0])
+
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"find": "Synthetic old phrase.", "replace": "Synthetic new phrase."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            browser.baseline = [*BASELINE, row("button", "Synthetic changed UI")]
+            drifted = execute(self.request("apply", root / "apply", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "plan": str(plan_path),
+            }, {
+                "plan_sha256": planned["summary"]["plan_sha256"],
+                "idempotency_key": "synthetic-drift-key",
+                "expected_revision": plan["revision_id"],
+            }), browser)
+            self.assertEqual(drifted["status"], "error")
+            self.assertIn("changed after planning", drifted["errors"][0])
+            self.assertEqual(browser.mutations, 0)
+
+    def test_default_journal_stays_with_the_private_plan(self) -> None:
+        browser = FakeBrowser()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"find": "Synthetic old phrase.", "replace": "Synthetic new phrase."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            with mock.patch.dict(os.environ, {}, clear=True):
+                applied = execute(self.request("apply", root / "apply", {
+                    "collaboration_resource": COLLABORATION_RESOURCE,
+                    "plan": str(plan_path),
+                }, {
+                    "plan_sha256": planned["summary"]["plan_sha256"],
+                    "idempotency_key": "synthetic-default-journal",
+                    "expected_revision": plan["revision_id"],
+                }), browser)
+            self.assertEqual(applied["status"], "ok")
+            journals = list((plan_path.parent / ".google-docs-state" / "browser-journal").glob("*.json"))
+            self.assertEqual(len(journals), 1)
+
+    def test_preflight_error_is_reported_before_authorization(self) -> None:
+        class PreflightFailureBrowser(FakeBrowser):
+            def run(self, program: dict, **kwargs: object) -> dict:
+                if program["capability"] == "mutation":
+                    self.programs.append(program)
+                    return {
+                        "status": "error",
+                        "public": {"mutation_started": False},
+                        "private": {},
+                        "error": "synthetic-private-value-mismatch",
+                    }
+                return super().run(program, **kwargs)
+
+        browser = PreflightFailureBrowser()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"find": "Synthetic old phrase.", "replace": "Synthetic new phrase."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            failed = execute(self.request("apply", root / "apply", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "plan": str(plan_path),
+            }, {
+                "plan_sha256": planned["summary"]["plan_sha256"],
+                "idempotency_key": "synthetic-preflight-failure",
+                "expected_revision": plan["revision_id"],
+            }), browser)
+            self.assertEqual(failed["status"], "error")
+            self.assertIn("preflight failed before authorization", failed["errors"][0])
+            self.assertIn("synthetic-private-value-mismatch", failed["errors"][0])
+            self.assertEqual(browser.mutations, 0)
+            self.assertFalse(list((plan_path.parent / ".google-docs-state").rglob("*.json")))
 
     def test_pending_journal_blocks_duplicate_after_boundary_failure(self) -> None:
         browser = FakeBrowser(fail_after_boundary=True)
