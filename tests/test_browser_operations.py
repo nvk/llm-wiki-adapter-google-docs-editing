@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from google_docs_adapter import __version__
 from google_docs_adapter.browser_executor import snapshot_sha256
 from google_docs_adapter.browser_operations import COLLABORATION_RESOURCE, execute
 from google_docs_adapter.storage import sha256_file, write_private_json
@@ -105,6 +106,9 @@ class BrowserOperationsTests(unittest.TestCase):
     def test_manifest_uses_one_static_collaboration_capability_and_no_oauth(self) -> None:
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))
+        project = (root / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn(f'version = "{__version__}"', project)
+        self.assertEqual(manifest["version"], __version__)
         self.assertEqual(manifest["network"], "none")
         self.assertFalse(manifest["writes_wiki"])
         self.assertNotIn("oauth", json.dumps(manifest).lower())

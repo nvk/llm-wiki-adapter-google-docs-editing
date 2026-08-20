@@ -7,12 +7,12 @@ tracked suggestions, and verifying the browser-visible result.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (private)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Current source version: `0.8.9`
-- This branch: local multi-tab collaboration development; not released
+- Current release: `0.8.9`
+- Shared executor requirement: `llm-wiki-chrome` `0.1.0` or later
 
 No Google OAuth client, Picker, Drive scope, Docs API token, Workspace account,
 per-document Google grant, or persistent Docs host permission is used by this
-development path.
+browser path.
 
 ## Architecture
 

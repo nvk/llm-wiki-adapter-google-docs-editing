@@ -14,7 +14,7 @@ DRIVER_ID = "google-docs-suggestions"
 DRIVER_VERSION = "collaboration-3"
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 MAX_BROWSER_EDITS = 15
-# Kept while the unreleased shadow-compiler tests migrate to the production name.
+# Compatibility alias while shadow-compiler tests migrate to the production name.
 MAX_SHADOW_EDITS = MAX_BROWSER_EDITS
 MAX_PRIVATE_VALUE_BYTES = 16_384
 SNAPSHOT_FIELDS = ["role", "name", "value", "description"]
