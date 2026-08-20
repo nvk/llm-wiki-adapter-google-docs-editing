@@ -7,7 +7,7 @@ tracked suggestions, and verifying the browser-visible result.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (private)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Current released version: `0.8.8`
+- Current source version: `0.8.9`
 - This branch: local multi-tab collaboration development; not released
 
 No Google OAuth client, Picker, Drive scope, Docs API token, Workspace account,
@@ -121,15 +121,16 @@ or one bounded append suggestion:
 ```
 
 Up to 15 non-overlapping find strings may be planned together, or one append
-may be planned alone. Before the first
-mutation, the extension recomputes the exact ordered accessibility projection
-and compares it to the private plan revision hash. It then preflights every find
-as `1 of 1`, enters Suggesting mode, crosses one governed mutation boundary,
+may be planned alone. Immediately before the batch, the adapter reruns its
+private inspection and requires the exact approved revision fingerprint. The
+executor then enters Suggesting mode, clears and verifies each dialog value,
+preflights every find as `1 of 1`, and crosses one governed mutation boundary,
 applies the batch, proves Suggesting mode again, and returns a private read-back
 projection. A verified receipt is emitted only when every planned text value is
 browser-visible and the projection changed. A later `verify` binds the same
 private plan to the receipt so volatile Docs chrome does not invalidate a
-still-visible suggestion.
+still-visible suggestion. When no state directory is configured, the
+idempotency journal stays beside the private plan under `.google-docs-state/`.
 
 Use `scripts/make_apply_request.py` to build the governed apply request from the
 private plan, then run it through llm-wiki with the exact plan hash. The terminal
@@ -142,8 +143,9 @@ response stays content-free; complete artifacts and receipts remain private.
 - Exact find/replace or one end-of-document append suggestion; no free-form
   browser programs.
 - Up to 15 edits per plan.
-- AX projection is the browser-owned revision model. It may fail closed when
-  Google changes its accessibility surface or volatile UI changes the snapshot.
+- AX projection is the browser-owned planning and read-back model. The adapter
+  checks it immediately before execution; the executor does not re-hash the
+  entire volatile Docs accessibility chrome a second time.
 - Browser verification is not as semantically rich as Docs API accepted/rejected
   projections and suggestion IDs. The tradeoff removes provider OAuth and
   per-file grants while preserving an exact mutation boundary and read-back.

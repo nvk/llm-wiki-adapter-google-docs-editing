@@ -35,11 +35,14 @@ plans, or receipts.
 
 ## Revision and tracked-suggestion proof
 
-Planning hashes the ordered, bounded accessibility projection. The mutation
-program recomputes that projection inside Chrome before the governed mutation
-boundary and fails closed on mismatch. All find strings are preflighted as
-unique before authorization. Replace clicks happen only after Suggesting mode
-is asserted, and the mode is asserted again after the batch.
+Planning hashes the ordered, bounded accessibility projection. Apply reruns the
+same private inspection immediately before execution and fails closed if its
+fingerprint differs from the approved revision. The executor does not use a
+second full-tree hash because unrelated Docs UI and collaborator chrome can
+change without changing the planned text. It instead clears and verifies every
+dialog value and preflights every find as unique before authorization. Replace
+clicks happen only after Suggesting mode is asserted, and the mode is asserted
+again after the batch.
 
 A successful UI command is provisional. The adapter requires a private
 post-mutation projection, a changed revision hash, and visible planned text

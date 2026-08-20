@@ -11,7 +11,7 @@ from .document import DOCUMENT_ID_RE
 
 BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1"
 DRIVER_ID = "google-docs-suggestions"
-DRIVER_VERSION = "collaboration-2"
+DRIVER_VERSION = "collaboration-3"
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 MAX_BROWSER_EDITS = 15
 # Kept while the unreleased shadow-compiler tests migrate to the production name.
@@ -371,7 +371,14 @@ def _preflight_edit_actions(index: int) -> list[dict[str, Any]]:
     dialog = {"role": "dialog", "name": "Find and replace"}
     return [
         {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 0, "within": dialog}},
-        {"op": "insert_private_text", "slot": f"edit.{index:03d}.find", "replace_all": True},
+        {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
+        {"op": "dispatch_key_chord", "keys": ["backspace"]},
+        {"op": "insert_private_text", "slot": f"edit.{index:03d}.find", "replace_all": False},
+        {
+            "op": "wait_ax_private_value",
+            "slot": f"edit.{index:03d}.find",
+            "timeout_ms": 5_000,
+        },
         {"op": "assert_ax", "locator": {"role": "statictext", "name": "1 of 1"}},
     ]
 
@@ -381,9 +388,15 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
     dialog = {"role": "dialog", "name": "Find and replace"}
     return [
         {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 0, "within": dialog}},
-        {"op": "insert_private_text", "slot": f"{prefix}.find", "replace_all": True},
+        {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
+        {"op": "dispatch_key_chord", "keys": ["backspace"]},
+        {"op": "insert_private_text", "slot": f"{prefix}.find", "replace_all": False},
+        {"op": "wait_ax_private_value", "slot": f"{prefix}.find", "timeout_ms": 5_000},
         {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 1, "within": dialog}},
-        {"op": "insert_private_text", "slot": f"{prefix}.replace", "replace_all": True},
+        {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
+        {"op": "dispatch_key_chord", "keys": ["backspace"]},
+        {"op": "insert_private_text", "slot": f"{prefix}.replace", "replace_all": False},
+        {"op": "wait_ax_private_value", "slot": f"{prefix}.replace", "timeout_ms": 5_000},
         {"op": "click_ax", "locator": {"role": "button", "name": "Replace"}},
     ]
 
@@ -393,22 +406,15 @@ def compile_suggestion_program(
     plan_sha256: str,
     edits: list[dict[str, Any]],
     collaboration: dict[str, str],
-    revision_sha256: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     if not SHA256.fullmatch(plan_sha256):
         raise ValueError("plan_sha256 must be lowercase hexadecimal SHA-256")
-    if revision_sha256 is None:
-        # Compatibility for older shadow compiler tests. Production browser-only
-        # mutation always supplies the inspected revision fingerprint.
-        revision_sha256 = "0" * 64
-    if not SHA256.fullmatch(revision_sha256):
-        raise ValueError("revision_sha256 must be lowercase hexadecimal SHA-256")
     if not isinstance(edits, list) or not 1 <= len(edits) <= MAX_BROWSER_EDITS:
         raise ValueError(f"shared-executor programs require 1-{MAX_BROWSER_EDITS} edits")
     target = _target(document_id, collaboration)
 
-    slots = ["baseline.sha256"]
-    private_values = {"baseline.sha256": revision_sha256}
+    slots: list[str] = []
+    private_values: dict[str, str] = {}
     append_indexes: list[int] = []
     for index, edit in enumerate(edits):
         if not isinstance(edit, dict):
@@ -443,13 +449,6 @@ def compile_suggestion_program(
         {"op": "assert_exact_target"},
         {"op": "attach_debugger"},
         *_ready_actions(),
-        {
-            "op": "assert_ax_private_sha256",
-            "slot": "baseline.sha256",
-            "locator": dict(SNAPSHOT_LOCATOR),
-            "fields": list(SNAPSHOT_FIELDS),
-            "max_items": SNAPSHOT_MAX_ITEMS,
-        },
         *_mode_actions(),
     ]
     if append_indexes:

@@ -57,11 +57,11 @@ adapter selects the requested Google document by its exact document identity.
 4. Pass the plan's hash internally through `--approve-remote-write`, use a
    caller-stable idempotency key, and pass the plan revision as
    `expected_revision`. Never ask the user to copy an approval hash.
-5. Run `apply`. The shared executor re-hashes the AX projection inside Chrome
-   before the governed boundary, enters Suggesting mode, preflights every find
-   as `1 of 1` or positions an append at the exact document end, applies the
-   plan, proves Suggesting mode again, and returns a private post-mutation
-   projection.
+5. Run `apply`. The adapter first repeats private inspection and requires the
+   approved revision. The executor then enters Suggesting mode, clears and
+   verifies each dialog field, preflights every find as `1 of 1` or positions an
+   append at the exact document end, applies the plan, proves Suggesting mode
+   again, and returns a private post-mutation projection.
 6. Treat success as verified only when the adapter observes every planned text
    value in browser read-back and emits a verified remote receipt. A pending
    journal after a post-boundary failure blocks duplicate retries.
@@ -71,3 +71,8 @@ adapter selects the requested Google document by its exact document identity.
 
 Report content-free status and counts unless the user explicitly asks to see
 document text from the private inspection artifact.
+
+If provider execution fails, stop and diagnose or create a new plan. Never
+switch to ad hoc low-level browser calls, ordinal comment controls, or manual
+find/replace loops. That bypasses the plan, revision, idempotency, and read-back
+controls and can leave a partially applied document.
