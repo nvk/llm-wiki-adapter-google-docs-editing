@@ -1,8 +1,8 @@
 # Google Docs Editing Adapter
 
-Content-free llm-wiki adapter for inspecting an explicitly exposed
-Google Doc, planning exact replacements or a bounded append, applying them as
-tracked suggestions, and verifying the browser-visible result.
+Edit Google Docs with tracked suggestions from llm-wiki. The adapter plans
+exact replacements or a bounded append, applies them in Suggesting mode, and
+verifies the result.
 
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public)
 - Manifest ID: `google-docs-editing`
