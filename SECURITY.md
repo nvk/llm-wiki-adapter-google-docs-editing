@@ -1,6 +1,6 @@
 # Security and content boundary
 
-This private repository contains tool code only. Never commit real document
+This public repository contains tool code only. Never commit real document
 content, URLs, IDs, edit specs, plans, projections, receipts, journals,
 credentials, captures, or results.
 
@@ -57,6 +57,6 @@ honestly and never converted into direct edits.
 ## Threat boundary
 
 The shared extension is powerful while attached to a user-exposed tab. Install
-it only from the reviewed private executor repository. A compromised local
+it only from the reviewed public executor repository. A compromised local
 account, Chrome installation, extension, or already signed-in Google session is
 outside this adapter's threat boundary.

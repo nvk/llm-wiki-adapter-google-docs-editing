@@ -157,7 +157,7 @@ class BrowserOperationsTests(unittest.TestCase):
 
             remote_write = {
                 "plan_sha256": sha256_file(plan_path),
-                "idempotency_key": "synthetic-idempotency-1",
+                "idempotency_key": "synthetic-idempotency-1",  # gitleaks:allow -- synthetic fixture
                 "expected_revision": plan["revision_id"],
             }
             state = root / "state"

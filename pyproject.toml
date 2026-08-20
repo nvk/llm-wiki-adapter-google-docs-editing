@@ -2,7 +2,7 @@
 name = "llm-wiki-adapter-google-docs-editing"
 version = "0.8.9"
 requires-python = ">=3.9"
-description = "Private content-free Google Docs tracked-changes adapter"
+description = "Content-free Google Docs tracked-changes adapter"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

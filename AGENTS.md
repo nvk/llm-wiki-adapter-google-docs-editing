@@ -1,8 +1,8 @@
-# Private llm-wiki Adapter Instructions
+# Public llm-wiki Adapter Instructions
 
 This repository is a tool, never a content store.
 
-- Keep the repository private.
+- Keep the repository public, content-free, and safe to clone and inspect.
 - Commit only executable code, manifests, documentation, tests, and synthetic
   fixtures generated inside temporary test directories.
 - Never commit real source content, document IDs, edit plans, OAuth credentials,

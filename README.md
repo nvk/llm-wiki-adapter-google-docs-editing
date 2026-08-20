@@ -1,10 +1,10 @@
 # Google Docs Editing Adapter
 
-Private, content-free llm-wiki tool for inspecting an explicitly exposed
+Content-free llm-wiki adapter for inspecting an explicitly exposed
 Google Doc, planning exact replacements or a bounded append, applying them as
 tracked suggestions, and verifying the browser-visible result.
 
-- Repository: `nvk/llm-wiki-adapter-google-docs-editing` (private)
+- Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
 - Current release: `0.8.9`
@@ -33,15 +33,15 @@ not `<all_urls>` or a persistent `https://docs.google.com/*` permission.
 
 ## One-time setup
 
-Install the shared executor package into this adapter's private environment and
+Install the shared executor package into this adapter's isolated environment and
 install its native host:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install --no-deps --no-build-isolation \
-  /absolute/private/llm-wiki-chrome
-/absolute/private/llm-wiki-chrome/.venv/bin/python \
-  /absolute/private/llm-wiki-chrome/adapter.py browser-install
+  /absolute/local/llm-wiki-chrome
+/absolute/local/llm-wiki-chrome/.venv/bin/python \
+  /absolute/local/llm-wiki-chrome/adapter.py browser-install
 ```
 
 Use a normal local package install rather than an editable install: cloud-backed
