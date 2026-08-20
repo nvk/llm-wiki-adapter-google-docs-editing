@@ -1,6 +1,6 @@
 # Google Docs editing agent workflow
 
-This provider guide is owned by the private `google-docs-editing` adapter. The
+This provider guide is owned by the targeted `google-docs-editing` adapter. The
 public llm-wiki plugin discovers it through `adapter route`; Google-specific
 steps do not belong in llm-wiki itself.
 
@@ -10,7 +10,7 @@ steps do not belong in llm-wiki itself.
 2. The user clicks **LLM Wiki Browser Executor** on each such tab. Every gesture
    adds an ephemeral grant bound to the exact tab, URL, origin, and window. The
    workspace is capped at 16 grants.
-3. The agent uses the private adapter. There is no Google OAuth, Picker,
+3. The agent uses this adapter. There is no Google OAuth, Picker,
    per-document API grant, persistent host permission, or per-document
    llm-wiki registration.
 

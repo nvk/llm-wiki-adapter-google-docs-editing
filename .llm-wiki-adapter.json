@@ -2,8 +2,8 @@
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
   "version": "0.8.9",
-  "description": "Private tool for revision-locked Google Docs suggestions through explicitly shared browser tabs.",
-  "distribution": "private",
+  "description": "Content-free adapter for revision-locked Google Docs suggestions through explicitly shared browser tabs.",
+  "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],
   "capabilities": [
     "google-docs-browser-inspection",
