@@ -565,6 +565,10 @@ def compile_suggestion_presence_program(
             },
             {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
             {"op": "dispatch_key_chord", "keys": ["backspace"]},
+            {
+                "op": "focus_ax",
+                "locator": {"role": "textbox", "name": "Find", "unique": True},
+            },
             {"op": "insert_private_text", "slot": slot, "replace_all": False},
             {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
             {
