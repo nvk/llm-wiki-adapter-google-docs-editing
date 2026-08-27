@@ -480,9 +480,11 @@ def _dialog_actions() -> list[dict[str, Any]]:
 
 
 def _preflight_edit_actions(index: int) -> list[dict[str, Any]]:
-    dialog = {"role": "dialog", "name": "Find and replace"}
     return [
-        {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 0, "within": dialog}},
+        {
+            "op": "focus_ax",
+            "locator": {"role": "textbox", "name": "Find", "unique": True},
+        },
         {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
         {"op": "dispatch_key_chord", "keys": ["backspace"]},
         {"op": "insert_private_text", "slot": f"edit.{index:03d}.find", "replace_all": False},
@@ -501,9 +503,11 @@ def _preflight_edit_actions(index: int) -> list[dict[str, Any]]:
 
 def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
     prefix = f"edit.{index:03d}"
-    dialog = {"role": "dialog", "name": "Find and replace"}
     return [
-        {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 0, "within": dialog}},
+        {
+            "op": "focus_ax",
+            "locator": {"role": "textbox", "name": "Find", "unique": True},
+        },
         {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
         {"op": "dispatch_key_chord", "keys": ["backspace"]},
         {"op": "insert_private_text", "slot": f"{prefix}.find", "replace_all": False},
@@ -513,7 +517,10 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
             "locator": {"role": "statictext", "name": "1 of 1"},
             "timeout_ms": 5_000,
         },
-        {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 1, "within": dialog}},
+        {
+            "op": "focus_ax",
+            "locator": {"role": "textbox", "name": "Replace with", "unique": True},
+        },
         {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
         {"op": "dispatch_key_chord", "keys": ["backspace"]},
         {"op": "insert_private_text", "slot": f"{prefix}.replace", "replace_all": False},
@@ -541,7 +548,6 @@ def compile_suggestion_presence_program(
         *_ready_actions(),
         *_dialog_actions(),
     ]
-    dialog = {"role": "dialog", "name": "Find and replace"}
     for index, edit in enumerate(edits):
         if not isinstance(edit, dict) or set(edit) not in ({"append"}, {"find", "replace"}):
             raise ValueError("every presence probe needs one exact replacement or append")
@@ -553,7 +559,10 @@ def compile_suggestion_presence_program(
         slot = f"verify.{index:03d}.text"
         private_values[slot] = text
         actions.extend([
-            {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 0, "within": dialog}},
+            {
+                "op": "focus_ax",
+                "locator": {"role": "textbox", "name": "Find", "unique": True},
+            },
             {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
             {"op": "dispatch_key_chord", "keys": ["backspace"]},
             {"op": "insert_private_text", "slot": slot, "replace_all": False},

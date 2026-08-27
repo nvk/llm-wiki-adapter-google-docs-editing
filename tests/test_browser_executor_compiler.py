@@ -197,6 +197,18 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             "locator": {"role": "statictext", "name": "1 of 1"},
             "timeout_ms": 5_000,
         }, flat[:boundary])
+        self.assertIn({
+            "op": "focus_ax",
+            "locator": {"role": "textbox", "name": "Find", "unique": True},
+        }, flat)
+        self.assertIn({
+            "op": "focus_ax",
+            "locator": {
+                "role": "textbox",
+                "name": "Replace with",
+                "unique": True,
+            },
+        }, flat)
         self.assertEqual(program["result"]["private_fields"], ["docs.after-ax"])
 
     def test_inspection_collects_a_bounded_document_scan_and_restores_start(self) -> None:
@@ -261,6 +273,10 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         boundary = operations.index("before_mutation")
         self.assertEqual(operations[boundary + 1 :], ["detach_debugger"])
         self.assertEqual(operations[:boundary].count("insert_private_text"), 1)
+        self.assertIn({
+            "op": "focus_ax",
+            "locator": {"role": "textbox", "name": "Find", "unique": True},
+        }, flat[:boundary])
         self.assertIn({
             "op": "wait_ax",
             "locator": {
