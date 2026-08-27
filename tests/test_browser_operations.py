@@ -631,6 +631,64 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(browser.mutations, 0)
             self.assertFalse(list((plan_path.parent / ".google-docs-state").rglob("*.json")))
 
+    def test_transient_suggestion_preflight_retries_only_before_boundary(self) -> None:
+        class TransientPreflightBrowser(FakeBrowser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.preflight_failures_remaining = 2
+
+            def run(self, program: dict, **kwargs: object) -> dict:
+                if (
+                    program["capability"] == "mutation"
+                    and self.preflight_failures_remaining
+                ):
+                    self.preflight_failures_remaining -= 1
+                    self.programs.append(program)
+                    return {
+                        "status": "error",
+                        "public": {"mutation_started": False, "action_count": 20},
+                        "private": {},
+                        "error": "cdp-command-timeout",
+                    }
+                return super().run(program, **kwargs)
+
+        browser = TransientPreflightBrowser()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"append": "Synthetic appended suggestion."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            browser.after = [*AFTER, row("paragraph", "Synthetic appended suggestion.")]
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")},
+            ), mock.patch("google_docs_adapter.browser_operations.time.sleep") as sleep:
+                applied = execute(self.request("apply", root / "apply", {
+                    "collaboration_resource": COLLABORATION_RESOURCE,
+                    "plan": str(plan_path),
+                }, {
+                    "plan_sha256": planned["summary"]["plan_sha256"],
+                    "idempotency_key": "synthetic-transient-preflight",
+                    "expected_revision": plan["revision_id"],
+                }), browser)
+            self.assertEqual(applied["status"], "ok")
+            self.assertEqual(browser.mutations, 1)
+            mutation_programs = [
+                value for value in browser.programs
+                if value["capability"] == "mutation"
+            ]
+            self.assertEqual(len(mutation_programs), 3)
+            self.assertEqual(sleep.call_count, 2)
+
     def test_pending_journal_blocks_duplicate_after_boundary_failure(self) -> None:
         browser = FakeBrowser(fail_after_boundary=True)
         with tempfile.TemporaryDirectory() as temporary:

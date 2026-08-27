@@ -117,11 +117,13 @@ Report content-free status and counts unless the user explicitly asks to see
 document text from the private inspection artifact.
 
 The adapter itself retries a transient `cdp-command-failed` or
-`cdp-command-timeout` during read-only inspection up to two times. If it still
-returns an error, stop and report the bounded action and error; do not add an
-outer retry or turn a normal user request into a source-code or package-manager
-audit. For any write failure at or after the governed mutation boundary, never
-retry with a new idempotency key. Diagnose the journal and receipt state first.
+`cdp-command-timeout` up to four times during read-only inspection and during a
+suggestion program only while it remains before the governed mutation boundary.
+If it still returns an error, stop and report the bounded action and error; do
+not add an outer retry or turn a normal user request into a source-code or
+package-manager audit. For any write failure at or after the governed mutation
+boundary, never retry with a new idempotency key. Diagnose the journal and
+receipt state first.
 
 Never switch to ad hoc low-level browser calls, ordinal comment controls, or
 manual find/replace loops. That bypasses the plan, revision, idempotency, and

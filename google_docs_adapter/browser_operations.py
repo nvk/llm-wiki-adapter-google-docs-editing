@@ -39,9 +39,9 @@ COLLABORATION_RESOURCE = "browser-collaboration:active-tab"
 INSPECTION_SCHEMA = "google-docs-browser-inspection/v1"
 PLAN_SCHEMA = "google-docs-browser-suggestion-plan/v1"
 EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
-INSPECTION_ATTEMPTS = 3
-INSPECTION_RETRY_SECONDS = 2.0
-TRANSIENT_INSPECTION_ERRORS = {"cdp-command-failed", "cdp-command-timeout"}
+BROWSER_TRANSIENT_ATTEMPTS = 5
+BROWSER_TRANSIENT_RETRY_SECONDS = 2.0
+TRANSIENT_BROWSER_ERRORS = {"cdp-command-failed", "cdp-command-timeout"}
 
 
 class BrowserClient(Protocol):
@@ -207,6 +207,14 @@ def _browser_error_detail(result: Any) -> str:
     return detail
 
 
+def _is_transient_browser_error(result: Any) -> bool:
+    return (
+        isinstance(result, dict)
+        and result.get("status") != "ok"
+        and result.get("error") in TRANSIENT_BROWSER_ERRORS
+    )
+
+
 def _run_inspection(
     browser: BrowserClient,
     collaboration: dict[str, str],
@@ -214,14 +222,16 @@ def _run_inspection(
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
     program = compile_inspection_program(document_id, collaboration)
     result: Any = None
-    for attempt in range(INSPECTION_ATTEMPTS):
+    for attempt in range(BROWSER_TRANSIENT_ATTEMPTS):
         result = browser.run(program)
         if isinstance(result, dict) and result.get("status") == "ok":
             break
-        error = result.get("error") if isinstance(result, dict) else None
-        if error not in TRANSIENT_INSPECTION_ERRORS or attempt + 1 >= INSPECTION_ATTEMPTS:
+        if (
+            not _is_transient_browser_error(result)
+            or attempt + 1 >= BROWSER_TRANSIENT_ATTEMPTS
+        ):
             raise RuntimeError(f"browser inspection failed: {_browser_error_detail(result)}")
-        time.sleep(INSPECTION_RETRY_SECONDS)
+        time.sleep(BROWSER_TRANSIENT_RETRY_SECONDS)
     private = result.get("private")
     snapshot = private.get("docs.ax") if isinstance(private, dict) else None
     if not isinstance(snapshot, list):
@@ -573,11 +583,18 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
         list(plan["edits"]),
         collaboration,
     )
-    result = browser.run(
-        program,
-        private_values=private_values,
-        before_mutation=mark_pending,
-    )
+    result: Any = None
+    for attempt in range(BROWSER_TRANSIENT_ATTEMPTS):
+        result = browser.run(
+            program,
+            private_values=private_values,
+            before_mutation=mark_pending,
+        )
+        if pending_written or not _is_transient_browser_error(result):
+            break
+        if attempt + 1 >= BROWSER_TRANSIENT_ATTEMPTS:
+            break
+        time.sleep(BROWSER_TRANSIENT_RETRY_SECONDS)
     if not pending_written:
         if not isinstance(result, dict) or result.get("status") != "ok":
             raise RuntimeError(

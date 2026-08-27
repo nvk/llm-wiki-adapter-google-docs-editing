@@ -141,9 +141,10 @@ may be planned alone. Inspection performs a bounded top-to-bottom AX scan and
 restores the document cursor to the start. Its revision fingerprint covers the
 Docs content projection rather than volatile editor chrome. Immediately before
 the batch, the adapter reruns that inspection and requires the exact approved
-revision fingerprint. Read-only inspection automatically retries up to two
-transient CDP command failures before reporting a bounded error. The executor
-then enters Suggesting mode, clears and
+revision fingerprint. Read-only inspection and pre-authorization suggestion
+setup automatically retry up to four transient CDP command failures before
+reporting a bounded error. No retry is allowed after authorization. The
+executor then enters Suggesting mode, clears and
 verifies each dialog value, waits for every find to settle as `1 of 1`, and crosses one governed mutation boundary,
 applies the batch, proves Suggesting mode again, and returns a private read-back
 projection. A verified receipt is emitted only when every planned text value is
