@@ -427,10 +427,25 @@ class BrowserOperationsTests(unittest.TestCase):
             row("StaticText", "Suggested insert exited"),
             row("InlineTextBox", "Banner hidden\u00a0"),
         ]
+        with_find_result = [
+            row("RootWebArea", "Synthetic changed title - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "Suggested insert start"),
+            content,
+            row("StaticText", "Suggested insert end"),
+            row("StaticText", "1 of 1"),
+            row("StaticText", "A much longer transient exact Find query result."),
+            row("InlineTextBox", "Banner hidden\u00a0"),
+        ]
         self.assertEqual(document_projection(first), [content])
+        self.assertEqual(document_projection(with_find_result), [content])
         self.assertEqual(
             document_projection_sha256(first),
             document_projection_sha256(second),
+        )
+        self.assertEqual(
+            document_projection_sha256(first),
+            document_projection_sha256(with_find_result),
         )
 
     def test_isolated_adapter_bootstraps_client_from_companion_command(self) -> None:

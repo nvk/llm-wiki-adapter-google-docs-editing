@@ -124,8 +124,34 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
         and row["name"].replace("\u00a0", " ").strip().casefold() == "banner hidden"
     ), None)
     if banner_index is not None:
+        live_segment = snapshot[banner_index + 1:]
+        suggested_start = next((
+            index
+            for index, row in enumerate(live_segment)
+            if str(row.get("role") or "").lower() == "statictext"
+            and isinstance(row.get("name"), str)
+            and row["name"].replace("\u00a0", " ").strip().casefold()
+            == "suggested insert start"
+        ), None)
+        if suggested_start is not None:
+            suggested_content: list[dict[str, Any]] = []
+            for row in live_segment[suggested_start + 1:]:
+                role = str(row.get("role") or "").lower()
+                name = row.get("name")
+                normalized_name = (
+                    name.replace("\u00a0", " ").strip().casefold()
+                    if isinstance(name, str)
+                    else ""
+                )
+                if role == "statictext" and normalized_name == "suggested insert end":
+                    break
+                if role == "statictext" and isinstance(name, str) and name.strip():
+                    suggested_content.append(dict(row))
+            if suggested_content:
+                return suggested_content
+
         live_rows: list[dict[str, Any]] = []
-        for row in snapshot[banner_index + 1:]:
+        for row in live_segment:
             role = str(row.get("role") or "").lower()
             if role == "inlinetextbox":
                 break
