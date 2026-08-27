@@ -15,6 +15,17 @@ For a normal new agent session, do only this before provider work:
    `adapter run`; put its output and response in the registered private output
    root.
 
+Use the adapter-owned request builders rather than hand-writing JSON:
+
+```bash
+python "$ADAPTER_ROOT/scripts/make_inspect_request.py" \
+  --url "$DOC_URL" --output-dir "$RUN_DIR" --request "$REQUEST"
+
+python "$ADAPTER_ROOT/scripts/make_plan_request.py" \
+  --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
+  --output-dir "$RUN_DIR" --request "$REQUEST"
+```
+
 Do not start by inspecting extension source, Homebrew files, sockets, browser
 internals, or general wiki articles. The registered adapter is the supported
 entry point and owns runtime bootstrap. For a read-only request, stop after a

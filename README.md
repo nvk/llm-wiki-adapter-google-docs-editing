@@ -74,7 +74,20 @@ or sandbox override; the registry passes only its value and never stores it.
 2. Give the agent the concrete edit instruction and exact document URL.
 3. The adapter selects only that document from the explicitly shared workspace.
 
-An inspect or plan request uses the static resource plus the expected URL:
+Build inspect and plan requests in the registered private roots instead of
+hand-writing JSON:
+
+```bash
+python "$ADAPTER_ROOT/scripts/make_inspect_request.py" \
+  --url "$DOC_URL" --output-dir "$RUN_DIR" --request "$REQUEST"
+
+python "$ADAPTER_ROOT/scripts/make_plan_request.py" \
+  --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
+  --output-dir "$RUN_DIR" --request "$REQUEST"
+```
+
+The resulting inspect or plan request uses the static resource plus the exact
+expected URL:
 
 ```json
 {

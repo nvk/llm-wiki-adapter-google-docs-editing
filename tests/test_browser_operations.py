@@ -117,6 +117,11 @@ class BrowserOperationsTests(unittest.TestCase):
         self.assertEqual(manifest["network"], "none")
         self.assertFalse(manifest["writes_wiki"])
         self.assertNotIn("oauth", json.dumps(manifest).lower())
+        self.assertTrue(
+            {"inspect", "read", "review"}.issubset(
+                set(manifest["routes"][0]["intents"])
+            )
+        )
         for name in ("inspect", "plan", "apply", "verify"):
             self.assertEqual(
                 manifest["operations"][name]["remote_resource_arguments"],
@@ -126,6 +131,67 @@ class BrowserOperationsTests(unittest.TestCase):
             manifest["operations"]["verify"]["read_arguments"],
             ["receipt", "plan"],
         )
+
+    def test_request_builders_create_private_inspect_and_plan_requests(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            private_root = Path(temporary)
+            spec = private_root / "input" / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"append": "Synthetic appended suggestion."}],
+            })
+            cases = [
+                (
+                    "make_inspect_request.py",
+                    [],
+                    "inspect",
+                    private_root / "inspect-output",
+                ),
+                (
+                    "make_plan_request.py",
+                    ["--edit-spec", str(spec)],
+                    "plan",
+                    private_root / "plan-output",
+                ),
+            ]
+            for script, extra_args, operation, output_dir in cases:
+                with self.subTest(script=script):
+                    request_path = private_root / f"{operation}-request.json"
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(root / "scripts" / script),
+                            "--url",
+                            DOCUMENT_URL,
+                            *extra_args,
+                            "--output-dir",
+                            str(output_dir),
+                            "--request",
+                            str(request_path),
+                        ],
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+                    self.assertEqual(
+                        Path(completed.stdout.strip()), request_path.resolve()
+                    )
+                    request = json.loads(request_path.read_text(encoding="utf-8"))
+                    self.assertEqual(request["operation"], operation)
+                    self.assertEqual(request["output_dir"], str(output_dir.resolve()))
+                    self.assertEqual(
+                        request["arguments"]["expected_document_url"],
+                        DOCUMENT_URL,
+                    )
+                    if operation == "plan":
+                        self.assertEqual(
+                            request["arguments"]["edit_spec"], str(spec.resolve())
+                        )
+                    self.assertEqual(request_path.stat().st_mode & 0o077, 0)
 
     def test_docs_live_region_fallback_excludes_accumulated_cursor_announcements(self) -> None:
         content = row("StaticText", "Synthetic document content.")

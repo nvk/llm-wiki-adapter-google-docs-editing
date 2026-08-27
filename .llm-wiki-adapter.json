@@ -22,7 +22,10 @@
   "routes": [
     {
       "id": "edit-google-document",
-      "intents": ["edit", "revise", "update", "proofread", "replace", "suggest"],
+      "intents": [
+        "edit", "revise", "update", "proofread", "replace", "suggest",
+        "inspect", "read", "review"
+      ],
       "resource": {
         "kind": "url",
         "schemes": ["https"],
