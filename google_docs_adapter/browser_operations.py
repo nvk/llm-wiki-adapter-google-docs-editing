@@ -742,15 +742,17 @@ def recover_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict
     if collaboration is None:
         raise RuntimeError("the planned Google Doc is no longer exposed")
     document_id = _same_plan_collaboration(plan, collaboration)
-    _snapshot, live_revision, _fragments = _run_inspection(
+    snapshot, live_revision, _fragments = _run_inspection(
         browser, collaboration, document_id,
     )
-    if live_revision != expected_revision:
-        raise RuntimeError(
-            "the browser-visible base document changed after the pending write; refusing automatic recovery"
-        )
-    _probe_append_presence(browser, plan, plan_sha256, collaboration, document_id)
+    append_text = _planned_text(plan["edits"][0])
+    ax_text_observed = _snapshot_contains_text(snapshot, append_text)
+    if not ax_text_observed:
+        _probe_append_presence(browser, plan, plan_sha256, collaboration, document_id)
     verification = _append_presence_verification(expected_revision, live_revision)
+    verification["verification_method"] = (
+        "browser-ax-exact-text" if ax_text_observed else "exact-docs-find-probe"
+    )
     verification["target_url_sha256"] = sha256_bytes(target["url"].encode("utf-8"))
     run_id = sha256_bytes(idempotency_key.encode("utf-8"))[:24]
     apply_response = _successful_apply_response(
@@ -805,7 +807,11 @@ def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str,
     target = plan.get("target")
     if not isinstance(target, dict) or target.get("document_id") != document_id:
         raise ValueError("verification plan does not belong to the exposed Google Doc")
-    if _is_append_plan(plan):
+    planned_text_matches = all(
+        _snapshot_contains_text(snapshot, _planned_text(edit))
+        for edit in plan.get("edits", [])
+    )
+    if _is_append_plan(plan) and not planned_text_matches:
         _probe_append_presence(
             browser,
             plan,
@@ -814,11 +820,6 @@ def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str,
             document_id,
         )
         planned_text_matches = True
-    else:
-        planned_text_matches = all(
-            _snapshot_contains_text(snapshot, _planned_text(edit))
-            for edit in plan.get("edits", [])
-        )
     verified = target_matches and planned_text_matches
     report = {
         "schema": "google-docs-browser-suggestion-verification/v1",
