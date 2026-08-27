@@ -279,6 +279,9 @@ def _target(document_id: str, collaboration: dict[str, str]) -> dict[str, Any]:
         "origin": target_origin,
         "path_prefixes": [document_prefix],
         "collaboration_id": collaboration_id,
+        # Google Docs' editor and suggestion UI live in the root frame. Avoid
+        # unrelated OOPIF accessibility sessions, which can stall full-tree reads.
+        "include_child_frames": False,
     }
 
 
