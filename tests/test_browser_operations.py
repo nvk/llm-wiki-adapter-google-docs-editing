@@ -10,7 +10,10 @@ from pathlib import Path
 from unittest import mock
 
 from google_docs_adapter import __version__
-from google_docs_adapter.browser_executor import document_projection_sha256
+from google_docs_adapter.browser_executor import (
+    document_projection,
+    document_projection_sha256,
+)
 from google_docs_adapter.browser_operations import COLLABORATION_RESOURCE, execute
 from google_docs_adapter.storage import sha256_file, write_private_json
 
@@ -122,6 +125,30 @@ class BrowserOperationsTests(unittest.TestCase):
         self.assertEqual(
             manifest["operations"]["verify"]["read_arguments"],
             ["receipt", "plan"],
+        )
+
+    def test_docs_live_region_fallback_excludes_accumulated_cursor_announcements(self) -> None:
+        content = row("StaticText", "Synthetic document content.")
+        first = [
+            row("RootWebArea", "Synthetic - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "Screen reader support enabled."),
+            content,
+            row("InlineTextBox", "Banner hidden\u00a0"),
+        ]
+        second = [
+            row("RootWebArea", "Synthetic changed title - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "Suggested insert end"),
+            row("StaticText", "new line"),
+            content,
+            row("StaticText", "Suggested insert exited"),
+            row("InlineTextBox", "Banner hidden\u00a0"),
+        ]
+        self.assertEqual(document_projection(first), [content])
+        self.assertEqual(
+            document_projection_sha256(first),
+            document_projection_sha256(second),
         )
 
     def test_isolated_adapter_bootstraps_client_from_companion_command(self) -> None:

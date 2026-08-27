@@ -22,6 +22,16 @@ SNAPSHOT_LOCATOR = {"name_matches": ".+"}
 SNAPSHOT_MAX_ITEMS = 5000
 INSPECTION_MAX_SCROLLS = 20
 PAGE_ANNOUNCEMENT = re.compile(r"^On page [0-9]+(?: of [0-9]+)?[.]?$")
+DOCS_LIVE_REGION_STATUS = re.compile(
+    r"^(?:"
+    r"Banner hidden|"
+    r"Screen reader support enabled[.]?|"
+    r"[0-9]+ visible tabs? named .+|"
+    r"Suggested insert(?: start| end| exited)?|"
+    r"new line|blank"
+    r")$",
+    re.IGNORECASE,
+)
 
 
 def canonical_program_sha256(program: dict[str, Any]) -> str:
@@ -100,6 +110,35 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 break
     if projection:
         return projection
+
+    # Docs' screen-reader live region does not always repeat the page marker.
+    # Its content is the StaticText segment after "Banner hidden" and before
+    # the mirrored InlineTextBox segment. Status announcements can accumulate,
+    # so retain the longest remaining content row rather than hashing cursor
+    # movement noise.
+    banner_index = next((
+        index
+        for index, row in enumerate(snapshot)
+        if str(row.get("role") or "").lower() == "statictext"
+        and isinstance(row.get("name"), str)
+        and row["name"].replace("\u00a0", " ").strip().casefold() == "banner hidden"
+    ), None)
+    if banner_index is not None:
+        live_rows: list[dict[str, Any]] = []
+        for row in snapshot[banner_index + 1:]:
+            role = str(row.get("role") or "").lower()
+            if role == "inlinetextbox":
+                break
+            name = row.get("name")
+            if (
+                role == "statictext"
+                and isinstance(name, str)
+                and name.strip()
+                and not DOCS_LIVE_REGION_STATUS.fullmatch(name.replace("\u00a0", " ").strip())
+            ):
+                live_rows.append(dict(row))
+        if live_rows:
+            return [max(live_rows, key=lambda row: len(str(row.get("name") or "")))]
 
     # Synthetic fixtures and future Docs projections may expose semantic text
     # roles without the screen-reader live-region page announcement.
