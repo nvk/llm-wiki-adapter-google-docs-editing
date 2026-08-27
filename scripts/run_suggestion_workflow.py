@@ -95,8 +95,10 @@ def main() -> int:
             raise WorkflowFailure("invalid edit specification")
         run_dir = Path(args.run_dir).expanduser().resolve(strict=False)
         if run_dir.exists():
-            raise WorkflowFailure("run directory already exists")
-        run_dir.mkdir(parents=True, mode=0o700)
+            if not run_dir.is_dir() or next(run_dir.iterdir(), None) is not None:
+                raise WorkflowFailure("run directory must be absent or empty")
+        else:
+            run_dir.mkdir(parents=True, mode=0o700)
         try:
             run_dir.chmod(0o700)
         except OSError:

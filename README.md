@@ -96,6 +96,9 @@ Build requests in the registered private roots instead of hand-writing JSON:
 For a complete authorized write, use the serialized workflow runner rather
 than launching plan, apply, and verify as separate or overlapping processes:
 
+The selected run directory may be absent or pre-created and empty. A non-empty
+directory is rejected so artifacts from separate attempts cannot be mixed.
+
 ```bash
 "$ADAPTER_ROOT/scripts/run_suggestion_workflow.py" \
   --llm-wiki "$LLM_WIKI" --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \

@@ -312,22 +312,24 @@ class BrowserOperationsTests(unittest.TestCase):
             )
             fake_llm_wiki.chmod(0o700)
             run_dir = private_root / "output" / "workflow"
+            run_dir.mkdir(parents=True)
+            command = [
+                sys.executable,
+                str(root / "scripts" / "run_suggestion_workflow.py"),
+                "--llm-wiki",
+                str(fake_llm_wiki),
+                "--url",
+                DOCUMENT_URL,
+                "--edit-spec",
+                str(spec),
+                "--run-dir",
+                str(run_dir),
+                "--idempotency-key",
+                "synthetic-serialized-workflow",
+                "--approve-remote-write",
+            ]
             completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(root / "scripts" / "run_suggestion_workflow.py"),
-                    "--llm-wiki",
-                    str(fake_llm_wiki),
-                    "--url",
-                    DOCUMENT_URL,
-                    "--edit-spec",
-                    str(spec),
-                    "--run-dir",
-                    str(run_dir),
-                    "--idempotency-key",
-                    "synthetic-serialized-workflow",
-                    "--approve-remote-write",
-                ],
+                command,
                 cwd=root,
                 capture_output=True,
                 text=True,
@@ -344,6 +346,20 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertTrue(final["verified"])
             self.assertTrue((run_dir / "apply-response.json").is_file())
             self.assertTrue((run_dir / "verify-response.json").is_file())
+
+            repeated = subprocess.run(
+                command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            self.assertEqual(repeated.returncode, 2)
+            self.assertEqual(json.loads(repeated.stdout)["stage"], "validate")
+            self.assertEqual(call_log.read_text().splitlines(), [
+                "plan", "apply", "verify",
+            ])
 
     def test_docs_live_region_fallback_excludes_accumulated_cursor_announcements(self) -> None:
         content = row("StaticText", "Synthetic document content.")

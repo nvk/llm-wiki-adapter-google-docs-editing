@@ -38,6 +38,16 @@ or assuming a `python` command exists:
 For an authorized write with a finished edit spec, prefer the serialized
 workflow runner so plan, apply, and verify cannot overlap:
 
+For one exact append, the complete edit-spec shape is:
+
+```json
+{"schema":"google-docs-edit-spec/v1","edits":[{"append":"Exact text."}]}
+```
+
+Create that file under the registered private input root. Choose a new run
+directory under the registered private output root; it may be absent or already
+created and empty, but it must not contain artifacts from another attempt.
+
 ```bash
 "$ADAPTER_ROOT/scripts/run_suggestion_workflow.py" \
   --llm-wiki "$LLM_WIKI" --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
