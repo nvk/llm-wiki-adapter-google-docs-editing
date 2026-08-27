@@ -48,13 +48,21 @@ AFTER = [
 
 
 class FakeBrowser:
-    def __init__(self, *, baseline: list[dict] | None = None, fail_after_boundary: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        baseline: list[dict] | None = None,
+        fail_after_boundary: bool = False,
+        presence_found: bool = True,
+    ) -> None:
         self.collaboration = dict(COLLABORATION)
         self.baseline = baseline or list(BASELINE)
         self.after = list(AFTER)
         self.fail_after_boundary = fail_after_boundary
+        self.presence_found = presence_found
         self.programs: list[dict] = []
         self.mutations = 0
+        self.presence_probes = 0
 
     def collaborations(self) -> list[dict[str, str]]:
         return [dict(self.collaboration)] if self.collaboration else []
@@ -78,6 +86,14 @@ class FakeBrowser:
         assert private_values is not None
         assert "baseline.sha256" not in private_values
         before_mutation()
+        if program["program_id"] == "google-docs-suggestion-presence-v1":
+            self.presence_probes += 1
+            return {
+                "status": "ok" if self.presence_found else "error",
+                "public": {"mutation_started": True},
+                "private": {},
+                "error": None if self.presence_found else "synthetic-text-not-found",
+            }
         self.mutations += 1
         if self.fail_after_boundary:
             return {"status": "error", "public": {}, "private": {}, "error": "synthetic-failure"}
@@ -122,7 +138,7 @@ class BrowserOperationsTests(unittest.TestCase):
                 set(manifest["routes"][0]["intents"])
             )
         )
-        for name in ("inspect", "plan", "apply", "verify"):
+        for name in ("inspect", "plan", "apply", "recover", "verify"):
             self.assertEqual(
                 manifest["operations"][name]["remote_resource_arguments"],
                 ["collaboration_resource"],
@@ -300,6 +316,15 @@ class BrowserOperationsTests(unittest.TestCase):
                 "  plan_path=Path(value['arguments']['plan'])\n"
                 "  digest=hashlib.sha256(plan_path.read_bytes()).hexdigest()\n"
                 "  assert args[args.index('--approve-remote-write')+1]==digest\n"
+                "  if value['remote_write']['idempotency_key'].endswith('recovery'):\n"
+                "    result={'status':'error'}\n"
+                "  else: result={'status':'ok','summary':{'suggestion_count':1,"
+                "'tracked_changes':True},'remote_receipt':{'plan_sha256':digest,"
+                "'verification':{'status':'verified'}}}\n"
+                "elif operation=='recover':\n"
+                "  plan_path=Path(value['arguments']['plan'])\n"
+                "  digest=hashlib.sha256(plan_path.read_bytes()).hexdigest()\n"
+                "  assert args[args.index('--approve-remote-write')+1]==digest\n"
                 "  result={'status':'ok','summary':{'suggestion_count':1,"
                 "'tracked_changes':True},'remote_receipt':{'plan_sha256':digest,"
                 "'verification':{'status':'verified'}}}\n"
@@ -340,6 +365,29 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(call_log.read_text().splitlines(), [
                 "plan", "apply", "verify",
             ])
+
+            recovery_run_dir = private_root / "output" / "recovery-workflow"
+            recovery_command = list(command)
+            recovery_command[recovery_command.index(str(run_dir))] = str(
+                recovery_run_dir
+            )
+            recovery_command[
+                recovery_command.index("synthetic-serialized-workflow")
+            ] = "synthetic-serialized-recovery"
+            recovered = subprocess.run(
+                recovery_command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+            self.assertEqual(call_log.read_text().splitlines(), [
+                "plan", "apply", "verify", "plan", "apply", "recover", "verify",
+            ])
+            self.assertEqual(json.loads(recovered.stdout)["status"], "ok")
+            self.assertTrue((recovery_run_dir / "recover-response.json").is_file())
             final = json.loads(completed.stdout)
             self.assertEqual(final["status"], "ok")
             self.assertTrue(final["tracked_changes"])
@@ -358,7 +406,7 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(repeated.returncode, 2)
             self.assertEqual(json.loads(repeated.stdout)["stage"], "validate")
             self.assertEqual(call_log.read_text().splitlines(), [
-                "plan", "apply", "verify",
+                "plan", "apply", "verify", "plan", "apply", "recover", "verify",
             ])
 
     def test_docs_live_region_fallback_excludes_accumulated_cursor_announcements(self) -> None:
@@ -817,6 +865,91 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(second["status"], "error")
             self.assertIn("refusing a duplicate", second["errors"][0])
             self.assertEqual(browser.mutations, 1)
+
+    def test_append_readback_uses_exact_find_probe_when_ax_text_is_truncated(self) -> None:
+        browser = FakeBrowser()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"append": "Synthetic appended suggestion."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            # The changed projection omits the full suggestion, as Docs does
+            # after collapsing a long suggestion card.
+            browser.after = list(AFTER)
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")},
+            ):
+                applied = execute(self.request("apply", root / "apply", {
+                    "collaboration_resource": COLLABORATION_RESOURCE,
+                    "plan": str(plan_path),
+                }, {
+                    "plan_sha256": planned["summary"]["plan_sha256"],
+                    "idempotency_key": "synthetic-truncated-append",
+                    "expected_revision": plan["revision_id"],
+                }), browser)
+            self.assertEqual(applied["status"], "ok")
+            self.assertEqual(browser.mutations, 1)
+            self.assertEqual(browser.presence_probes, 1)
+            self.assertEqual(
+                applied["remote_receipt"]["verification"]["verification_method"],
+                "exact-docs-find-probe",
+            )
+
+    def test_pending_append_can_be_recovered_without_duplicate_mutation(self) -> None:
+        browser = FakeBrowser(fail_after_boundary=True, presence_found=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"append": "Synthetic recovered suggestion."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            remote_write = {
+                "plan_sha256": planned["summary"]["plan_sha256"],
+                "idempotency_key": "synthetic-recovered-append",
+                "expected_revision": plan["revision_id"],
+            }
+            apply_request = self.request("apply", root / "apply", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "plan": str(plan_path),
+            }, remote_write)
+            recover_request = self.request("recover", root / "recover", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "plan": str(plan_path),
+            }, remote_write)
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")},
+            ):
+                failed = execute(apply_request, browser)
+                browser.fail_after_boundary = False
+                browser.presence_found = True
+                recovered = execute(recover_request, browser)
+                repeated = execute(apply_request, browser)
+            self.assertEqual(failed["status"], "error")
+            self.assertEqual(recovered["status"], "ok")
+            self.assertEqual(recovered["operation"], "recover")
+            self.assertEqual(repeated["status"], "ok")
+            self.assertEqual(repeated["operation"], "apply")
+            self.assertEqual(browser.mutations, 1)
+            self.assertEqual(browser.presence_probes, 2)
 
     def test_append_plan_needs_no_existing_source_text(self) -> None:
         browser = FakeBrowser()

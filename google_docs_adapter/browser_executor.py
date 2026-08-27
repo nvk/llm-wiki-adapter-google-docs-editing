@@ -522,6 +522,76 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
     ]
 
 
+def compile_suggestion_presence_program(
+    document_id: str,
+    plan_sha256: str,
+    edits: list[dict[str, Any]],
+    collaboration: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Compile an exact Docs Find probe that cannot change document content."""
+    if not SHA256.fullmatch(plan_sha256):
+        raise ValueError("plan_sha256 must be lowercase hexadecimal SHA-256")
+    if not isinstance(edits, list) or not 1 <= len(edits) <= MAX_BROWSER_EDITS:
+        raise ValueError(f"presence probes require 1-{MAX_BROWSER_EDITS} edits")
+    private_values: dict[str, str] = {}
+    actions = [
+        {"op": "open_or_focus_exact_url"},
+        {"op": "assert_exact_target"},
+        {"op": "attach_debugger"},
+        *_ready_actions(),
+        *_dialog_actions(),
+    ]
+    dialog = {"role": "dialog", "name": "Find and replace"}
+    for index, edit in enumerate(edits):
+        if not isinstance(edit, dict) or set(edit) not in ({"append"}, {"find", "replace"}):
+            raise ValueError("every presence probe needs one exact replacement or append")
+        text = edit.get("append") if "append" in edit else edit.get("replace")
+        if not isinstance(text, str) or not text:
+            raise ValueError("presence probe text must be non-empty")
+        if len(text.encode("utf-8")) > MAX_PRIVATE_VALUE_BYTES:
+            raise ValueError("presence probe text is too large for the shared executor")
+        slot = f"verify.{index:03d}.text"
+        private_values[slot] = text
+        actions.extend([
+            {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 0, "within": dialog}},
+            {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
+            {"op": "dispatch_key_chord", "keys": ["backspace"]},
+            {"op": "insert_private_text", "slot": slot, "replace_all": False},
+            {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
+            {
+                "op": "wait_ax",
+                "locator": {
+                    "role": "statictext",
+                    "name_matches": r"^1 of [1-9][0-9]*$",
+                },
+                "timeout_ms": 5_000,
+            },
+        ])
+    # The executor treats private text entry as a mutation-capability action,
+    # even though every entry above is confined to Docs' Find dialog. Keep the
+    # required boundary last so no action after it can alter document content.
+    actions.extend([
+        {"op": "dispatch_key_chord", "keys": ["escape"]},
+        {
+            "op": "wait_ax",
+            "locator": {"role": "button", "name_contains": "suggesting"},
+            "timeout_ms": 5_000,
+        },
+        {"op": "before_mutation"},
+        {"op": "detach_debugger"},
+    ])
+    return _program(
+        program_id="google-docs-suggestion-presence-v1",
+        plan_sha256=plan_sha256,
+        capability="mutation",
+        target=_target(document_id, collaboration),
+        actions=actions,
+        private_slots=list(private_values),
+        private_fields=[],
+        timeout_ms=60_000,
+    ), private_values
+
+
 def compile_suggestion_program(
     document_id: str,
     plan_sha256: str,

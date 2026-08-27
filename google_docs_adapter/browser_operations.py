@@ -18,6 +18,7 @@ from .browser_executor import (
     MAX_BROWSER_EDITS,
     assert_expected_document_url,
     compile_inspection_program,
+    compile_suggestion_presence_program,
     compile_suggestion_program,
     document_projection_sha256,
     document_text_fragments,
@@ -504,6 +505,70 @@ def _verify_after_snapshot(
     }
 
 
+def _is_append_plan(plan: dict[str, Any]) -> bool:
+    edits = plan.get("edits")
+    return (
+        isinstance(edits, list)
+        and len(edits) == 1
+        and isinstance(edits[0], dict)
+        and set(edits[0]) == {"append"}
+    )
+
+
+def _probe_append_presence(
+    browser: BrowserClient,
+    plan: dict[str, Any],
+    plan_sha256: str,
+    collaboration: dict[str, str],
+    document_id: str,
+) -> None:
+    if not _is_append_plan(plan):
+        raise RuntimeError("exact presence recovery is limited to one append suggestion")
+    program, private_values = compile_suggestion_presence_program(
+        document_id,
+        plan_sha256,
+        list(plan["edits"]),
+        collaboration,
+    )
+    result: Any = None
+    for attempt in range(BROWSER_TRANSIENT_ATTEMPTS):
+        # The probe types only into Docs' Find dialog. Its protocol boundary is
+        # deliberately last, with no document-changing action after it.
+        result = browser.run(
+            program,
+            private_values=private_values,
+            before_mutation=lambda: None,
+        )
+        if not _is_transient_browser_error(result) or attempt + 1 >= BROWSER_TRANSIENT_ATTEMPTS:
+            break
+        time.sleep(BROWSER_TRANSIENT_RETRY_SECONDS)
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        raise RuntimeError(
+            "exact Docs Find probe did not observe the appended suggestion: "
+            + _browser_error_detail(result)
+        )
+
+
+def _append_presence_verification(
+    before_revision: str,
+    after_revision: str,
+) -> dict[str, Any]:
+    return {
+        "status": "verified",
+        "write_transport": "shared-browser-executor-suggesting-ui",
+        "verification_method": "exact-docs-find-probe",
+        "suggesting_mode_asserted_before_and_after": True,
+        "unique_find_preconditions_asserted_before_mutation": False,
+        "append_position_precondition_asserted_before_mutation": True,
+        "planned_text_observed_after_mutation": True,
+        "replacement_text_observed_after_mutation": False,
+        "stable_content_projection_changed": after_revision != before_revision,
+        "suggestion_count": 1,
+        "before_projection_sha256": before_revision,
+        "after_projection_sha256": after_revision,
+    }
+
+
 def _successful_apply_response(
     resource: str,
     plan_sha256: str,
@@ -602,16 +667,37 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
                 + _browser_error_detail(result)
             )
         raise RuntimeError("browser executor returned without crossing the governed mutation boundary")
-    if not isinstance(result, dict) or result.get("status") != "ok":
-        raise RuntimeError(
-            "browser suggestion write failed after authorization: "
-            + _browser_error_detail(result)
-        )
-    private = result.get("private")
+    result_ok = isinstance(result, dict) and result.get("status") == "ok"
+    private = result.get("private") if isinstance(result, dict) else None
     after_snapshot = private.get("docs.after-ax") if isinstance(private, dict) else None
-    if not isinstance(after_snapshot, list):
-        raise RuntimeError("browser executor did not return the private read-back projection")
-    after_revision, verification = _verify_after_snapshot(plan, after_snapshot)
+    try:
+        if not result_ok:
+            raise RuntimeError(
+                "browser suggestion write failed after authorization: "
+                + _browser_error_detail(result)
+            )
+        if not isinstance(after_snapshot, list):
+            raise RuntimeError("browser executor did not return the private read-back projection")
+        after_revision, verification = _verify_after_snapshot(plan, after_snapshot)
+    except RuntimeError as readback_error:
+        if not _is_append_plan(plan):
+            raise
+        try:
+            _probe_append_presence(
+                browser, plan, plan_sha256, collaboration, document_id,
+            )
+        except RuntimeError as probe_error:
+            raise RuntimeError(f"{readback_error}; {probe_error}") from probe_error
+        if isinstance(after_snapshot, list):
+            after_revision = document_projection_sha256(after_snapshot)
+        else:
+            after_snapshot, after_revision, _fragments = _run_inspection(
+                browser, collaboration, document_id,
+            )
+        verification = _append_presence_verification(expected_revision, after_revision)
+        verification["target_url_sha256"] = sha256_bytes(
+            plan["target"]["url"].encode("utf-8")
+        )
     response = _successful_apply_response(
         resource,
         plan_sha256,
@@ -627,6 +713,63 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
         "response": response,
     })
     return response
+
+
+def recover_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[str, Any]:
+    """Resolve a pending append journal by proving exact text without reapplying it."""
+    plan, plan_path, plan_sha256, expected_revision, idempotency_key = _validate_plan_request(request)
+    if not _is_append_plan(plan):
+        raise RuntimeError("only one pending append suggestion can be recovered automatically")
+    resource = COLLABORATION_RESOURCE
+    journal_path = _journal_path(idempotency_key, plan_path)
+    if not journal_path.is_file():
+        raise RuntimeError("no pending browser write exists for this idempotency key")
+    stored = load_json(journal_path, "idempotency journal")
+    if stored.get("plan_sha256") != plan_sha256 or stored.get("resource") != resource:
+        raise RuntimeError("idempotency key was already used for a different remote write")
+    stored_response = stored.get("response")
+    if isinstance(stored_response, dict):
+        recovered = dict(stored_response)
+        recovered["operation"] = "recover"
+        return recovered
+    if stored.get("status") != "pending":
+        raise RuntimeError("the browser write journal is not recoverable")
+
+    target = plan.get("target")
+    if not isinstance(target, dict) or not isinstance(target.get("url"), str):
+        raise ValueError("plan has no exact collaboration target")
+    collaboration = browser.collaboration_for_url(target["url"])
+    if collaboration is None:
+        raise RuntimeError("the planned Google Doc is no longer exposed")
+    document_id = _same_plan_collaboration(plan, collaboration)
+    _snapshot, live_revision, _fragments = _run_inspection(
+        browser, collaboration, document_id,
+    )
+    if live_revision != expected_revision:
+        raise RuntimeError(
+            "the browser-visible base document changed after the pending write; refusing automatic recovery"
+        )
+    _probe_append_presence(browser, plan, plan_sha256, collaboration, document_id)
+    verification = _append_presence_verification(expected_revision, live_revision)
+    verification["target_url_sha256"] = sha256_bytes(target["url"].encode("utf-8"))
+    run_id = sha256_bytes(idempotency_key.encode("utf-8"))[:24]
+    apply_response = _successful_apply_response(
+        resource,
+        plan_sha256,
+        idempotency_key,
+        expected_revision,
+        live_revision,
+        verification,
+        run_id,
+    )
+    write_private_json(journal_path, {
+        "plan_sha256": plan_sha256,
+        "resource": resource,
+        "response": apply_response,
+    })
+    recovered = dict(apply_response)
+    recovered["operation"] = "recover"
+    return recovered
 
 
 def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str, Any]:
@@ -662,10 +805,20 @@ def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str,
     target = plan.get("target")
     if not isinstance(target, dict) or target.get("document_id") != document_id:
         raise ValueError("verification plan does not belong to the exposed Google Doc")
-    planned_text_matches = all(
-        _snapshot_contains_text(snapshot, _planned_text(edit))
-        for edit in plan.get("edits", [])
-    )
+    if _is_append_plan(plan):
+        _probe_append_presence(
+            browser,
+            plan,
+            str(remote_receipt.get("plan_sha256", "")),
+            collaboration,
+            document_id,
+        )
+        planned_text_matches = True
+    else:
+        planned_text_matches = all(
+            _snapshot_contains_text(snapshot, _planned_text(edit))
+            for edit in plan.get("edits", [])
+        )
     verified = target_matches and planned_text_matches
     report = {
         "schema": "google-docs-browser-suggestion-verification/v1",
@@ -725,6 +878,8 @@ def execute(
             return plan_suggestions(request, active_browser)
         if operation == "apply":
             return apply_suggestions(request, active_browser)
+        if operation == "recover":
+            return recover_suggestions(request, active_browser)
         if operation == "verify":
             return verify_receipt(request, active_browser)
         return _error(str(operation), "unsupported operation")

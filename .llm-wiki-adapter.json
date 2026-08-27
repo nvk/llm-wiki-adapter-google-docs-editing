@@ -62,6 +62,13 @@
       "approved_plan_argument": "plan",
       "effects": ["remote-read", "remote-write"]
     },
+    "recover": {
+      "read_arguments": ["plan"],
+      "remote_resource_arguments": ["collaboration_resource"],
+      "requires_output_dir": true,
+      "approved_plan_argument": "plan",
+      "effects": ["remote-read", "remote-write"]
+    },
     "verify": {
       "read_arguments": ["receipt", "plan"],
       "remote_resource_arguments": ["collaboration_resource"],

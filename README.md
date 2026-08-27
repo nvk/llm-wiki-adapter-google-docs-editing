@@ -109,7 +109,10 @@ directory is rejected so artifacts from separate attempts cannot be mixed.
 It waits for every stage, passes the exact plan hash through the llm-wiki
 approval boundary, stops on the first failure, and prints one content-free
 final status. Private requests, plans, receipts, and verification artifacts
-remain in the selected registered run directory.
+remain in the selected registered run directory. If Docs truncates a newly
+appended suggestion in its accessibility projection, the runner can resolve
+the pending journal through an exact Docs Find probe; it never reapplies the
+append.
 
 The resulting inspect or plan request uses the static resource plus the exact
 expected URL:

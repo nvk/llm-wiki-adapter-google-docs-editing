@@ -31,6 +31,7 @@ def run_adapter(
     *,
     timeout: int,
     approved_plan_sha256: str | None = None,
+    require_ok: bool = True,
 ) -> dict[str, Any]:
     command = [
         str(llm_wiki),
@@ -60,7 +61,7 @@ def run_adapter(
     if not response.is_file():
         raise WorkflowFailure("adapter did not write a response")
     value = load_json(response, "adapter response")
-    if completed.returncode != 0 or value.get("status") != "ok":
+    if require_ok and (completed.returncode != 0 or value.get("status") != "ok"):
         raise WorkflowFailure("adapter operation failed")
     return value
 
@@ -157,7 +158,39 @@ def main() -> int:
             apply_response,
             timeout=args.timeout,
             approved_plan_sha256=plan_sha256,
+            require_ok=False,
         )
+        receipt_path = apply_response
+        if apply_result.get("status") != "ok":
+            stage = "recover"
+            recover_dir = run_dir / "recover"
+            recover_dir.mkdir(mode=0o700)
+            recover_request = run_dir / "recover-request.json"
+            recover_response = run_dir / "recover-response.json"
+            write_private_json(recover_request, {
+                "protocol": "llm-wiki-adapter/v1",
+                "adapter_id": ADAPTER_ID,
+                "operation": "recover",
+                "arguments": {
+                    "collaboration_resource": plan["collaboration_resource"],
+                    "plan": str(plan_path),
+                },
+                "output_dir": str(recover_dir),
+                "remote_write": {
+                    "plan_sha256": plan_sha256,
+                    "idempotency_key": args.idempotency_key,
+                    "expected_revision": plan["revision_id"],
+                },
+                "options": {},
+            })
+            apply_result = run_adapter(
+                llm_wiki,
+                recover_request,
+                recover_response,
+                timeout=args.timeout,
+                approved_plan_sha256=plan_sha256,
+            )
+            receipt_path = recover_response
         receipt = apply_result.get("remote_receipt")
         verification = receipt.get("verification") if isinstance(receipt, dict) else None
         if not isinstance(verification, dict) or verification.get("status") != "verified":
@@ -174,7 +207,7 @@ def main() -> int:
             "operation": "verify",
             "arguments": {
                 "collaboration_resource": plan["collaboration_resource"],
-                "receipt": str(apply_response),
+                "receipt": str(receipt_path),
                 "plan": str(plan_path),
             },
             "output_dir": str(verify_dir),

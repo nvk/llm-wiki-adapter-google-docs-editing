@@ -12,6 +12,7 @@ from google_docs_adapter.browser_executor import (
     MAX_SHADOW_EDITS,
     canonical_program_sha256,
     compile_inspection_program,
+    compile_suggestion_presence_program,
     compile_suggestion_program,
 )
 
@@ -138,7 +139,7 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("LLM_WIKI_BROWSER_EXECUTOR_ROOT"), "shared executor source is not configured")
     def test_compiled_program_passes_shared_validator(self) -> None:
         executor_root = Path(os.environ["LLM_WIKI_BROWSER_EXECUTOR_ROOT"]).resolve(strict=True)
-        program, _values = compile_suggestion_program(
+        suggestion_program, _values = compile_suggestion_program(
             DOCUMENT_ID,
             PLAN_SHA256,
             [
@@ -147,24 +148,31 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             ],
             COLLABORATION,
         )
+        presence_program, _values = compile_suggestion_presence_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [{"append": "Synthetic appended suggestion."}],
+            COLLABORATION,
+        )
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "program.json"
-            path.write_text(json.dumps(program), encoding="utf-8")
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    "import json,sys; from browser_executor.protocol import validate_program; "
-                    "validate_program(json.load(open(sys.argv[1])))",
-                    str(path),
-                ],
-                cwd=executor_root,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+            for program in (suggestion_program, presence_program):
+                path.write_text(json.dumps(program), encoding="utf-8")
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import json,sys; from browser_executor.protocol import validate_program; "
+                        "validate_program(json.load(open(sys.argv[1])))",
+                        str(path),
+                    ],
+                    cwd=executor_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_compiler_uses_stable_preflights_before_the_governed_boundary(self) -> None:
         program, private_values = compile_suggestion_program(
@@ -237,6 +245,30 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
                 [{"append": "One"}, {"append": "Two"}],
                 COLLABORATION,
             )
+
+    def test_presence_probe_confines_private_text_to_find_before_boundary(self) -> None:
+        text = "Synthetic appended suggestion."
+        program, private_values = compile_suggestion_presence_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [{"append": text}],
+            COLLABORATION,
+        )
+        self.assertNotIn(text, json.dumps(program))
+        self.assertEqual(private_values, {"verify.000.text": text})
+        flat = flatten(program["actions"])
+        operations = [action["op"] for action in flat]
+        boundary = operations.index("before_mutation")
+        self.assertEqual(operations[boundary + 1 :], ["detach_debugger"])
+        self.assertEqual(operations[:boundary].count("insert_private_text"), 1)
+        self.assertIn({
+            "op": "wait_ax",
+            "locator": {
+                "role": "statictext",
+                "name_matches": r"^1 of [1-9][0-9]*$",
+            },
+            "timeout_ms": 5_000,
+        }, flat[:boundary])
 
 
 if __name__ == "__main__":
