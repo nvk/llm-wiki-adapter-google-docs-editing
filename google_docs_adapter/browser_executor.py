@@ -22,6 +22,7 @@ SNAPSHOT_LOCATOR = {"name_matches": ".+"}
 SNAPSHOT_MAX_ITEMS = 5000
 INSPECTION_MAX_SCROLLS = 20
 PAGE_ANNOUNCEMENT = re.compile(r"^On page [0-9]+(?: of [0-9]+)?[.]?$")
+FIND_RESULT_COUNT = re.compile(r"^[0-9]+ of [0-9]+$")
 DOCS_LIVE_REGION_STATUS = re.compile(
     r"^(?:"
     r"Banner hidden|"
@@ -112,10 +113,9 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return projection
 
     # Docs' screen-reader live region does not always repeat the page marker.
-    # Its content is the StaticText segment after "Banner hidden" and before
-    # the mirrored InlineTextBox segment. Status announcements can accumulate,
-    # so retain the longest remaining content row rather than hashing cursor
-    # movement noise.
+    # Its virtualized AX rows can move across the suggested-insert boundary
+    # between otherwise identical reads, so use a canonical content set rather
+    # than treating transient accessibility order as document order.
     banner_index = next((
         index
         for index, row in enumerate(snapshot)
@@ -125,46 +125,44 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ), None)
     if banner_index is not None:
         live_segment = snapshot[banner_index + 1:]
-        suggested_start = next((
-            index
-            for index, row in enumerate(live_segment)
-            if str(row.get("role") or "").lower() == "statictext"
-            and isinstance(row.get("name"), str)
-            and row["name"].replace("\u00a0", " ").strip().casefold()
-            == "suggested insert start"
-        ), None)
-        if suggested_start is not None:
-            suggested_content: list[dict[str, Any]] = []
-            for row in live_segment[suggested_start + 1:]:
-                role = str(row.get("role") or "").lower()
-                name = row.get("name")
-                normalized_name = (
-                    name.replace("\u00a0", " ").strip().casefold()
-                    if isinstance(name, str)
-                    else ""
-                )
-                if role == "statictext" and normalized_name == "suggested insert end":
-                    break
-                if role == "statictext" and isinstance(name, str) and name.strip():
-                    suggested_content.append(dict(row))
-            if suggested_content:
-                return suggested_content
-
         live_rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        skip_next_find_text = False
         for row in live_segment:
             role = str(row.get("role") or "").lower()
-            if role == "inlinetextbox":
-                break
             name = row.get("name")
-            if (
-                role == "statictext"
-                and isinstance(name, str)
-                and name.strip()
-                and not DOCS_LIVE_REGION_STATUS.fullmatch(name.replace("\u00a0", " ").strip())
-            ):
-                live_rows.append(dict(row))
+            if role != "statictext" or not isinstance(name, str) or not name.strip():
+                continue
+            normalized_name = name.replace("\u00a0", " ").strip()
+            if FIND_RESULT_COUNT.fullmatch(normalized_name):
+                skip_next_find_text = True
+                continue
+            if DOCS_LIVE_REGION_STATUS.fullmatch(normalized_name):
+                continue
+            if skip_next_find_text:
+                skip_next_find_text = False
+                continue
+            candidate = dict(row)
+            identity = json.dumps(
+                candidate,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            live_rows.append(candidate)
         if live_rows:
-            return [max(live_rows, key=lambda row: len(str(row.get("name") or "")))]
+            return sorted(
+                live_rows,
+                key=lambda row: json.dumps(
+                    row,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+            )
 
     # Synthetic fixtures and future Docs projections may expose semantic text
     # roles without the screen-reader live-region page announcement.

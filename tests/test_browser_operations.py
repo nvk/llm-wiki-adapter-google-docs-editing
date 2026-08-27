@@ -448,6 +448,34 @@ class BrowserOperationsTests(unittest.TestCase):
             document_projection_sha256(with_find_result),
         )
 
+    def test_live_region_revision_ignores_virtual_suggestion_marker_order(self) -> None:
+        movable = row("StaticText", "Synthetic first document line.")
+        content = row("StaticText", "Synthetic second document line.")
+        after_marker = [
+            row("RootWebArea", "Synthetic - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "Suggested insert start"),
+            movable,
+            row("InlineTextBox", "Banner hidden\u00a0"),
+            content,
+        ]
+        before_marker = [
+            row("RootWebArea", "Synthetic - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            movable,
+            row("StaticText", "Suggested insert start"),
+            row("InlineTextBox", "Banner hidden\u00a0"),
+            content,
+        ]
+        self.assertEqual(
+            document_projection_sha256(after_marker),
+            document_projection_sha256(before_marker),
+        )
+        self.assertEqual(
+            set(row["name"] for row in document_projection(after_marker)),
+            {movable["name"], content["name"]},
+        )
+
     def test_isolated_adapter_bootstraps_client_from_companion_command(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:
