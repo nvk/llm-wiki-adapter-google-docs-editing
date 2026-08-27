@@ -93,6 +93,21 @@ Build requests in the registered private roots instead of hand-writing JSON:
   --output-dir "$RUN_DIR" --request "$REQUEST"
 ```
 
+For a complete authorized write, use the serialized workflow runner rather
+than launching plan, apply, and verify as separate or overlapping processes:
+
+```bash
+"$ADAPTER_ROOT/scripts/run_suggestion_workflow.py" \
+  --llm-wiki "$LLM_WIKI" --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
+  --run-dir "$RUN_DIR" --idempotency-key "$IDEMPOTENCY_KEY" \
+  --approve-remote-write
+```
+
+It waits for every stage, passes the exact plan hash through the llm-wiki
+approval boundary, stops on the first failure, and prints one content-free
+final status. Private requests, plans, receipts, and verification artifacts
+remain in the selected registered run directory.
+
 The resulting inspect or plan request uses the static resource plus the exact
 expected URL:
 

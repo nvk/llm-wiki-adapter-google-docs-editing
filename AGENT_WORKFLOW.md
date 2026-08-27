@@ -35,6 +35,23 @@ or assuming a `python` command exists:
   --output-dir "$RUN_DIR" --request "$REQUEST"
 ```
 
+For an authorized write with a finished edit spec, prefer the serialized
+workflow runner so plan, apply, and verify cannot overlap:
+
+```bash
+"$ADAPTER_ROOT/scripts/run_suggestion_workflow.py" \
+  --llm-wiki "$LLM_WIKI" --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
+  --run-dir "$RUN_DIR" --idempotency-key "$IDEMPOTENCY_KEY" \
+  --approve-remote-write
+```
+
+Run only that command and wait for its final JSON. If the shell tool reports a
+running process or session ID, poll that same process with the tool's wait
+primitive until it exits. Never inspect partial artifacts, rerun planning, or
+launch another adapter operation while any adapter command is still running.
+Do not inspect helper source, `--help`, or the README when this guide already
+supplies the exact command.
+
 Do not start by inspecting extension source, Homebrew files, sockets, browser
 internals, or general wiki articles. The registered adapter is the supported
 entry point and owns runtime bootstrap. For a read-only request, stop after a

@@ -265,6 +265,86 @@ class BrowserOperationsTests(unittest.TestCase):
             )
             self.assertEqual(request_path.stat().st_mode & 0o077, 0)
 
+    def test_serialized_workflow_runner_completes_plan_apply_and_verify(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            private_root = Path(temporary)
+            spec = private_root / "input" / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"append": "Synthetic serialized suggestion."}],
+            })
+            call_log = private_root / "calls.txt"
+            fake_llm_wiki = private_root / "fake-llm-wiki"
+            fake_llm_wiki.write_text(
+                "#!/usr/bin/env python3\n"
+                "import hashlib,json,sys\n"
+                "from pathlib import Path\n"
+                f"log=Path({str(call_log)!r})\n"
+                "args=sys.argv[1:]\n"
+                "request=Path(args[args.index('--request')+1])\n"
+                "response=Path(args[args.index('--response')+1])\n"
+                "value=json.loads(request.read_text())\n"
+                "operation=value['operation']\n"
+                "with log.open('a') as handle: handle.write(operation+'\\n')\n"
+                "if operation=='plan':\n"
+                "  spec=json.loads(Path(value['arguments']['edit_spec']).read_text())\n"
+                "  plan={'schema':'google-docs-browser-suggestion-plan/v1',"
+                "'write_transport':'shared-browser-executor-suggesting-ui',"
+                "'collaboration_resource':'browser-collaboration:active-tab',"
+                "'revision_id':'a'*64,'edits':spec['edits']}\n"
+                "  output=Path(value['output_dir']); output.mkdir(parents=True,exist_ok=True)\n"
+                "  (output/'plan.json').write_text(json.dumps(plan))\n"
+                "  result={'status':'ok','adapter_version':'0.9.0'}\n"
+                "elif operation=='apply':\n"
+                "  plan_path=Path(value['arguments']['plan'])\n"
+                "  digest=hashlib.sha256(plan_path.read_bytes()).hexdigest()\n"
+                "  assert args[args.index('--approve-remote-write')+1]==digest\n"
+                "  result={'status':'ok','summary':{'suggestion_count':1,"
+                "'tracked_changes':True},'remote_receipt':{'plan_sha256':digest,"
+                "'verification':{'status':'verified'}}}\n"
+                "elif operation=='verify':\n"
+                "  result={'status':'ok','summary':{'verified':True}}\n"
+                "else: raise SystemExit(3)\n"
+                "response.parent.mkdir(parents=True,exist_ok=True)\n"
+                "response.write_text(json.dumps(result))\n",
+                encoding="utf-8",
+            )
+            fake_llm_wiki.chmod(0o700)
+            run_dir = private_root / "output" / "workflow"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "scripts" / "run_suggestion_workflow.py"),
+                    "--llm-wiki",
+                    str(fake_llm_wiki),
+                    "--url",
+                    DOCUMENT_URL,
+                    "--edit-spec",
+                    str(spec),
+                    "--run-dir",
+                    str(run_dir),
+                    "--idempotency-key",
+                    "synthetic-serialized-workflow",
+                    "--approve-remote-write",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(call_log.read_text().splitlines(), [
+                "plan", "apply", "verify",
+            ])
+            final = json.loads(completed.stdout)
+            self.assertEqual(final["status"], "ok")
+            self.assertTrue(final["tracked_changes"])
+            self.assertTrue(final["verified"])
+            self.assertTrue((run_dir / "apply-response.json").is_file())
+            self.assertTrue((run_dir / "verify-response.json").is_file())
+
     def test_docs_live_region_fallback_excludes_accumulated_cursor_announcements(self) -> None:
         content = row("StaticText", "Synthetic document content.")
         first = [
