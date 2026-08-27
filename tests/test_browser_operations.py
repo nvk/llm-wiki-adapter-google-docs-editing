@@ -276,6 +276,26 @@ class BrowserOperationsTests(unittest.TestCase):
         self.assertIn("expected_document_url", inspected["errors"][0])
         self.assertEqual(browser.programs, [])
 
+    def test_inspection_error_reports_the_bounded_action(self) -> None:
+        class InspectionFailureBrowser(FakeBrowser):
+            def run(self, program: dict, **kwargs: object) -> dict:
+                self.programs.append(program)
+                return {
+                    "status": "error",
+                    "public": {"action_count": 12},
+                    "private": {},
+                    "error": "synthetic-cdp-failure",
+                }
+
+        browser = InspectionFailureBrowser()
+        with tempfile.TemporaryDirectory() as temporary:
+            inspected = execute(self.request("inspect", Path(temporary), {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+            }), browser)
+        self.assertEqual(inspected["status"], "error")
+        self.assertIn("synthetic-cdp-failure at bounded action 12", inspected["errors"][0])
+
     def test_wrong_exposed_document_and_revision_drift_fail_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

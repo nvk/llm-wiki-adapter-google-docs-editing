@@ -192,6 +192,18 @@ def _live_collaboration(
     return collaboration, document_id
 
 
+def _browser_error_detail(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "invalid executor result"
+    error = result.get("error")
+    detail = error if isinstance(error, str) and error else "invalid executor result"
+    public = result.get("public")
+    action_count = public.get("action_count") if isinstance(public, dict) else None
+    if type(action_count) is int and action_count >= 0:
+        detail += f" at bounded action {action_count}"
+    return detail
+
+
 def _run_inspection(
     browser: BrowserClient,
     collaboration: dict[str, str],
@@ -199,8 +211,7 @@ def _run_inspection(
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
     result = browser.run(compile_inspection_program(document_id, collaboration))
     if not isinstance(result, dict) or result.get("status") != "ok":
-        error = result.get("error") if isinstance(result, dict) else None
-        raise RuntimeError(f"browser inspection failed: {error or 'invalid executor result'}")
+        raise RuntimeError(f"browser inspection failed: {_browser_error_detail(result)}")
     private = result.get("private")
     snapshot = private.get("docs.ax") if isinstance(private, dict) else None
     if not isinstance(snapshot, list):
@@ -327,18 +338,6 @@ def _planned_text(edit: dict[str, Any]) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError("suggestion plan contains an invalid edit")
     return value
-
-
-def _browser_error_detail(result: Any) -> str:
-    if not isinstance(result, dict):
-        return "invalid executor result"
-    error = result.get("error")
-    detail = error if isinstance(error, str) and error else "invalid executor result"
-    public = result.get("public")
-    action_count = public.get("action_count") if isinstance(public, dict) else None
-    if type(action_count) is int and action_count >= 0:
-        detail += f" at bounded action {action_count}"
-    return detail
 
 
 def plan_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[str, Any]:
