@@ -13,13 +13,15 @@ BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1"
 DRIVER_ID = "google-docs-suggestions"
 DRIVER_VERSION = "collaboration-3"
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
-MAX_BROWSER_EDITS = 15
+MAX_BROWSER_EDITS = 9
 # Compatibility alias while shadow-compiler tests migrate to the production name.
 MAX_SHADOW_EDITS = MAX_BROWSER_EDITS
 MAX_PRIVATE_VALUE_BYTES = 16_384
 SNAPSHOT_FIELDS = ["role", "name", "value", "description"]
 SNAPSHOT_LOCATOR = {"name_matches": ".+"}
 SNAPSHOT_MAX_ITEMS = 5000
+INSPECTION_MAX_SCROLLS = 20
+PAGE_ANNOUNCEMENT = re.compile(r"^On page [0-9]+(?: of [0-9]+)?[.]?$")
 
 
 def canonical_program_sha256(program: dict[str, Any]) -> str:
@@ -73,6 +75,52 @@ def snapshot_text_fragments(snapshot: list[dict[str, Any]]) -> list[str]:
         if value not in combined:
             combined.append(value)
     return combined
+
+
+def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the stable Google Docs content slice, excluding volatile editor chrome."""
+    snapshot_sha256(snapshot)
+    projection: list[dict[str, Any]] = []
+    for index, row in enumerate(snapshot):
+        role = str(row.get("role") or "").lower()
+        name = row.get("name")
+        if role != "statictext" or not isinstance(name, str) or not PAGE_ANNOUNCEMENT.fullmatch(name):
+            continue
+        projection.append(dict(row))
+        for candidate in snapshot[index + 1:]:
+            candidate_role = str(candidate.get("role") or "").lower()
+            candidate_name = candidate.get("name")
+            if (
+                candidate_role == "statictext"
+                and isinstance(candidate_name, str)
+                and candidate_name.strip()
+                and not PAGE_ANNOUNCEMENT.fullmatch(candidate_name)
+            ):
+                projection.append(dict(candidate))
+                break
+    if projection:
+        return projection
+
+    # Synthetic fixtures and future Docs projections may expose semantic text
+    # roles without the screen-reader live-region page announcement.
+    semantic_roles = {"document", "heading", "paragraph", "text"}
+    projection = [
+        dict(row)
+        for row in snapshot
+        if str(row.get("role") or "").lower() in semantic_roles
+        and any(isinstance(row.get(key), str) and row[key].strip() for key in ("name", "value"))
+    ]
+    if not projection:
+        raise ValueError("browser inspection returned no stable document content projection")
+    return projection
+
+
+def document_projection_sha256(snapshot: list[dict[str, Any]]) -> str:
+    return snapshot_sha256(document_projection(snapshot))
+
+
+def document_text_fragments(snapshot: list[dict[str, Any]]) -> list[str]:
+    return snapshot_text_fragments(document_projection(snapshot))
 
 
 def _iter_actions(actions: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
@@ -179,6 +227,7 @@ def _program(
     private_slots: list[str],
     private_fields: list[str],
     timeout_ms: int,
+    max_repeat: int = 8,
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "protocol": BROWSER_PROTOCOL,
@@ -191,7 +240,7 @@ def _program(
         "limits": {
             "timeout_ms": timeout_ms,
             "max_actions": len(list(_iter_actions(actions))),
-            "max_repeat": 8,
+            "max_repeat": max_repeat,
         },
         "private_slots": private_slots,
         "actions": actions,
@@ -263,14 +312,32 @@ def _ready_actions() -> list[dict[str, Any]]:
     ]
 
 
-def _snapshot_action(private_result: str) -> dict[str, Any]:
-    return {
-        "op": "extract_ax_collection",
-        "locator": dict(SNAPSHOT_LOCATOR),
-        "fields": list(SNAPSHOT_FIELDS),
-        "private_result": private_result,
-        "max_items": SNAPSHOT_MAX_ITEMS,
-    }
+def _bounded_snapshot_actions(private_result: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "op": "wait_dom",
+            "locator": {"selector": "#docs-editor", "visible": True},
+            "timeout_ms": 5_000,
+        },
+        {"op": "click_dom", "locator": {"selector": "#docs-editor", "visible": True}},
+        {"op": "dispatch_key_chord", "keys": ["document-start"]},
+        {"op": "wait_duration", "duration_ms": 250},
+        {
+            "op": "collect_ax_by_scrolling",
+            "locator": dict(SNAPSHOT_LOCATOR),
+            "fields": list(SNAPSHOT_FIELDS),
+            "private_result": private_result,
+            "max_items": SNAPSHOT_MAX_ITEMS,
+            "direction": "down",
+            "distance_px": 640,
+            "max_scrolls": INSPECTION_MAX_SCROLLS,
+            "settle_ms": 250,
+            "dedupe_fields": list(SNAPSHOT_FIELDS),
+            "stable_rounds": 3,
+            "scroll_anchor": {"selector": "#docs-editor", "visible": True},
+        },
+        {"op": "dispatch_key_chord", "keys": ["document-start"]},
+    ]
 
 
 def compile_inspection_program(
@@ -288,7 +355,7 @@ def compile_inspection_program(
         {"op": "assert_exact_target"},
         {"op": "attach_debugger"},
         *_ready_actions(),
-        _snapshot_action("docs.ax"),
+        *_bounded_snapshot_actions("docs.ax"),
         {"op": "detach_debugger"},
     ]
     return _program(
@@ -300,6 +367,7 @@ def compile_inspection_program(
         private_slots=[],
         private_fields=["docs.ax"],
         timeout_ms=60_000,
+        max_repeat=INSPECTION_MAX_SCROLLS,
     )
 
 
@@ -364,6 +432,11 @@ def _dialog_actions() -> list[dict[str, Any]]:
                 ],
             ],
         },
+        {
+            "op": "wait_ax",
+            "locator": {"role": "dialog", "name": "Find and replace"},
+            "timeout_ms": 5_000,
+        },
     ]
 
 
@@ -379,7 +452,11 @@ def _preflight_edit_actions(index: int) -> list[dict[str, Any]]:
             "slot": f"edit.{index:03d}.find",
             "timeout_ms": 5_000,
         },
-        {"op": "assert_ax", "locator": {"role": "statictext", "name": "1 of 1"}},
+        {
+            "op": "wait_ax",
+            "locator": {"role": "statictext", "name": "1 of 1"},
+            "timeout_ms": 5_000,
+        },
     ]
 
 
@@ -392,6 +469,11 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
         {"op": "dispatch_key_chord", "keys": ["backspace"]},
         {"op": "insert_private_text", "slot": f"{prefix}.find", "replace_all": False},
         {"op": "wait_ax_private_value", "slot": f"{prefix}.find", "timeout_ms": 5_000},
+        {
+            "op": "wait_ax",
+            "locator": {"role": "statictext", "name": "1 of 1"},
+            "timeout_ms": 5_000,
+        },
         {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 1, "within": dialog}},
         {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
         {"op": "dispatch_key_chord", "keys": ["backspace"]},
@@ -459,7 +541,7 @@ def compile_suggestion_program(
                 "timeout_ms": 5_000,
             },
             {"op": "click_dom", "locator": {"selector": "#docs-editor", "visible": True}},
-            {"op": "dispatch_key_chord", "keys": ["platform-primary", "arrow-down"]},
+            {"op": "dispatch_key_chord", "keys": ["document-end"]},
             {"op": "assert_ax", "locator": {"role": "button", "name_contains": "suggesting"}},
         ])
     else:
@@ -488,7 +570,7 @@ def compile_suggestion_program(
             "locator": {"role": "button", "name_contains": "suggesting"},
             "timeout_ms": 5_000,
         },
-        _snapshot_action("docs.after-ax"),
+        *_bounded_snapshot_actions("docs.after-ax"),
         {"op": "detach_debugger"},
     ])
     return _program(
@@ -500,4 +582,5 @@ def compile_suggestion_program(
         private_slots=slots,
         private_fields=["docs.after-ax"],
         timeout_ms=180_000,
+        max_repeat=INSPECTION_MAX_SCROLLS,
     ), private_values

@@ -11,6 +11,7 @@ from pathlib import Path
 from google_docs_adapter.browser_executor import (
     MAX_SHADOW_EDITS,
     canonical_program_sha256,
+    compile_inspection_program,
     compile_suggestion_program,
 )
 
@@ -85,9 +86,28 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         )
         boundary = operations.index("before_mutation")
         self.assertNotIn("first_success", operations[boundary + 1:])
+        after_collections = [
+            action
+            for action in flat[boundary + 1:]
+            if action["op"] == "collect_ax_by_scrolling"
+        ]
+        self.assertEqual(len(after_collections), 1)
+        self.assertEqual(after_collections[0]["private_result"], "docs.after-ax")
+        self.assertEqual(after_collections[0]["max_scrolls"], 20)
+        self.assertEqual(program["limits"]["max_repeat"], 20)
         self.assertEqual(len(flat), program["limits"]["max_actions"])
 
     def test_compiler_caps_batch_and_private_value_sizes(self) -> None:
+        maximum_program, _values = compile_suggestion_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [
+                {"find": f"Synthetic old {index}", "replace": f"Synthetic new {index}"}
+                for index in range(MAX_SHADOW_EDITS)
+            ],
+            COLLABORATION,
+        )
+        self.assertLessEqual(maximum_program["limits"]["max_actions"], 200)
         with self.assertRaisesRegex(ValueError, f"1-{MAX_SHADOW_EDITS}"):
             compile_suggestion_program(
                 DOCUMENT_ID,
@@ -121,7 +141,10 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         program, _values = compile_suggestion_program(
             DOCUMENT_ID,
             PLAN_SHA256,
-            [{"find": "Synthetic old", "replace": "Synthetic new"}],
+            [
+                {"find": f"Synthetic old {index}", "replace": f"Synthetic new {index}"}
+                for index in range(MAX_SHADOW_EDITS)
+            ],
             COLLABORATION,
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -161,11 +184,29 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             if action["op"] == "insert_private_text":
                 self.assertEqual(flat[index + 1]["op"], "wait_ax_private_value")
                 self.assertEqual(flat[index + 1]["slot"], action["slot"])
-        self.assertIn(
-            {"op": "assert_ax", "locator": {"role": "statictext", "name": "1 of 1"}},
-            flat[:boundary],
-        )
+        self.assertIn({
+            "op": "wait_ax",
+            "locator": {"role": "statictext", "name": "1 of 1"},
+            "timeout_ms": 5_000,
+        }, flat[:boundary])
         self.assertEqual(program["result"]["private_fields"], ["docs.after-ax"])
+
+    def test_inspection_collects_a_bounded_document_scan_and_restores_start(self) -> None:
+        program = compile_inspection_program(DOCUMENT_ID, COLLABORATION)
+        flat = flatten(program["actions"])
+        collection = next(action for action in flat if action["op"] == "collect_ax_by_scrolling")
+        self.assertEqual(collection["scroll_anchor"], {
+            "selector": "#docs-editor",
+            "visible": True,
+        })
+        self.assertEqual(collection["max_scrolls"], 20)
+        self.assertEqual(program["limits"]["max_repeat"], 20)
+        self.assertEqual(
+            [action for action in flat if action["op"] == "dispatch_key_chord"].count(
+                {"op": "dispatch_key_chord", "keys": ["document-start"]}
+            ),
+            2,
+        )
 
     def test_compiler_supports_one_private_append_suggestion(self) -> None:
         text = "Synthetic appended suggestion."
@@ -184,6 +225,10 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         self.assertIn("click_dom", operations[:boundary])
         self.assertIn("insert_private_text", operations[boundary + 1:])
         self.assertNotIn("focus_ax", operations)
+        self.assertIn(
+            {"op": "dispatch_key_chord", "keys": ["document-end"]},
+            flatten(program["actions"])[:boundary],
+        )
 
         with self.assertRaisesRegex(ValueError, "exactly one append"):
             compile_suggestion_program(

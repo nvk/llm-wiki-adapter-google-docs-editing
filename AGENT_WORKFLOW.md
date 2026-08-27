@@ -7,7 +7,7 @@ steps do not belong in llm-wiki itself.
 ## User flow
 
 1. The user opens each page they want to share in their normal signed-in Chrome.
-2. The user clicks **LLM Wiki Browser Executor** on each such tab. Every gesture
+2. The user clicks **LLM Wiki for Chrome** on each such tab. Every gesture
    adds an ephemeral grant bound to the exact tab, URL, origin, and window. The
    workspace is capped at 16 grants.
 3. The agent uses this adapter. There is no Google OAuth, Picker,
@@ -47,9 +47,9 @@ adapter selects the requested Google document by its exact document identity.
 ## Governed edit
 
 1. Run `inspect` with the static collaboration resource and the requested URL.
-   The private artifact contains the bounded browser-visible AX projection and
-   its revision fingerprint.
-2. Build the smallest `google-docs-edit-spec/v1` plan: up to 15 non-overlapping
+   The private artifact contains a bounded top-to-bottom browser AX scan and a
+   content-only revision fingerprint that excludes volatile Docs chrome.
+2. Build the smallest `google-docs-edit-spec/v1` plan: up to 9 non-overlapping
    `find`/`replace` suggestions, or one `append` suggestion when no safe
    non-overlapping source text exists.
 3. Run `plan`. It binds the plan to the selected collaboration ID, exact live
@@ -59,7 +59,7 @@ adapter selects the requested Google document by its exact document identity.
    `expected_revision`. Never ask the user to copy an approval hash.
 5. Run `apply`. The adapter first repeats private inspection and requires the
    approved revision. The executor then enters Suggesting mode, clears and
-   verifies each dialog field, preflights every find as `1 of 1` or positions an
+   verifies each dialog field, waits for every find to settle as `1 of 1`, or positions an
    append at the exact document end, applies the plan, proves Suggesting mode
    again, and returns a private post-mutation projection.
 6. Treat success as verified only when the adapter observes every planned text
@@ -76,3 +76,14 @@ If provider execution fails, stop and diagnose or create a new plan. Never
 switch to ad hoc low-level browser calls, ordinal comment controls, or manual
 find/replace loops. That bypasses the plan, revision, idempotency, and read-back
 controls and can leave a partially applied document.
+
+## Session reliability
+
+- A new agent session does not require another extension click while Chrome is
+  still running and the tab grant remains in extension session storage.
+- A browser restart, extension reload/update, tab close, cross-origin
+  navigation, or explicit **Stop** revokes the ephemeral grant by design.
+- Normal runs discover the private native connector automatically. Do not pin a
+  per-process `s.<instance>` socket in adapter registration or shell startup.
+- If runtime loading fails, compare `llm-wiki-chrome doctor`, the extension
+  version, and this adapter's minimum executor version before planning a write.

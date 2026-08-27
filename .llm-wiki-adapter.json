@@ -1,18 +1,21 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
-  "version": "0.8.9",
+  "version": "0.9.0",
   "description": "Edit Google Docs with tracked suggestions through explicitly shared browser tabs.",
   "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],
   "capabilities": [
     "google-docs-browser-inspection",
+    "google-docs-bounded-document-scan",
     "google-docs-active-tab-collaboration",
     "google-docs-multi-tab-exact-document-selection",
     "google-docs-browser-revision-lock",
+    "google-docs-content-revision-lock",
     "google-docs-suggestion-planning",
     "google-docs-append-suggestions",
     "google-docs-shared-browser-executor",
+    "google-docs-shared-executor-runtime-bootstrap",
     "google-docs-tracked-changes",
     "google-docs-browser-readback-verification"
   ],

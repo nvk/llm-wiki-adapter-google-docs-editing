@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import importlib
+import json
 import os
+import re
+import shutil
+import subprocess
+import sys
 import time
+import unicodedata
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -11,6 +19,8 @@ from .browser_executor import (
     assert_expected_document_url,
     compile_inspection_program,
     compile_suggestion_program,
+    document_projection_sha256,
+    document_text_fragments,
     document_id_from_collaboration,
     document_id_from_expected_url,
     snapshot_sha256,
@@ -46,13 +56,76 @@ class BrowserClient(Protocol):
 
 
 def _default_browser() -> BrowserClient:
-    try:
+    def load_client() -> tuple[Any, str | None]:
         from browser_executor.client import BrowserExecutorClient
-    except ImportError as exc:
+
+        root = Path(sys.modules["browser_executor.client"].__file__).resolve().parents[1]
+        manifest_path = root / ".llm-wiki-adapter.json"
+        version = None
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if manifest.get("id") == "browser-execution":
+                    version = manifest.get("version")
+            except (OSError, json.JSONDecodeError):
+                pass
+        if version is None:
+            try:
+                version = distribution_version("llm-wiki-chrome")
+            except PackageNotFoundError:
+                pass
+        return BrowserExecutorClient, version
+
+    try:
+        browser_client, version = load_client()
+    except ImportError:
+        browser_client, version = None, None
+
+    if version is None:
+        command = shutil.which("llm-wiki-chrome")
+        client_root = None
+        if command:
+            for subcommand, parent_offset in (("client-path", 0), ("extension-path", 1)):
+                try:
+                    completed = subprocess.run(
+                        [command, subcommand],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if completed.returncode != 0:
+                    continue
+                candidate = Path(completed.stdout.strip()).expanduser().resolve(strict=False)
+                if parent_offset:
+                    candidate = candidate.parent
+                if (candidate / "browser_executor" / "client.py").is_file():
+                    client_root = candidate
+                    break
+        if client_root is not None:
+            sys.path.insert(0, str(client_root))
+            for name in list(sys.modules):
+                if name == "browser_executor" or name.startswith("browser_executor."):
+                    del sys.modules[name]
+            importlib.invalidate_caches()
+            try:
+                browser_client, version = load_client()
+            except ImportError:
+                browser_client, version = None, None
+
+    if browser_client is None or version is None:
         raise RuntimeError(
-            "the shared browser executor package is not installed in this adapter environment"
-        ) from exc
-    return BrowserExecutorClient()
+            "llm-wiki-chrome 0.1.1 or later is not installed; install the matching native companion"
+        )
+    try:
+        version_parts = tuple(int(part) for part in str(version).split("."))
+    except ValueError as exc:
+        raise RuntimeError("the shared browser executor version is invalid") from exc
+    if version_parts < (0, 1, 1):
+        raise RuntimeError("llm-wiki-chrome 0.1.1 or later is required")
+    return browser_client()
 
 
 def _response(operation: str, status: str, run_id: str, **values: Any) -> dict[str, Any]:
@@ -90,20 +163,26 @@ def _live_collaboration(
     browser: BrowserClient,
 ) -> tuple[dict[str, str], str]:
     _collaboration_resource(request)
-    collaborations = browser.collaborations()
-    if not collaborations:
-        raise RuntimeError(
-            "no page is exposed; open the requested Google Doc and click the LLM Wiki Browser Executor"
-        )
     expected = request.get("arguments", {}).get("expected_document_url")
     expected_document_id = document_id_from_expected_url(expected)
     matches: list[dict[str, str]] = []
-    for candidate in collaborations:
-        try:
-            if document_id_from_collaboration(candidate) == expected_document_id:
-                matches.append(candidate)
-        except ValueError:
-            continue
+    collaborations: list[dict[str, str]] = []
+    for attempt in range(21):
+        collaborations = browser.collaborations()
+        matches = []
+        for candidate in collaborations:
+            try:
+                if document_id_from_collaboration(candidate) == expected_document_id:
+                    matches.append(candidate)
+            except ValueError:
+                continue
+        if matches or attempt == 20:
+            break
+        time.sleep(0.1)
+    if not collaborations:
+        raise RuntimeError(
+            "no page is exposed; open the requested Google Doc and click LLM Wiki for Chrome"
+        )
     if not matches:
         raise RuntimeError("none of the explicitly shared tabs is the requested Google Doc")
     if len(matches) > 1:
@@ -126,7 +205,7 @@ def _run_inspection(
     snapshot = private.get("docs.ax") if isinstance(private, dict) else None
     if not isinstance(snapshot, list):
         raise RuntimeError("browser inspection did not return the private accessibility projection")
-    revision = snapshot_sha256(snapshot)
+    revision = document_projection_sha256(snapshot)
     return snapshot, revision, snapshot_text_fragments(snapshot)
 
 
@@ -143,6 +222,7 @@ def inspect_document(
         "document_id": document_id,
         "revision_id": revision,
         "text_fragments": fragments,
+        "document_text_fragments": document_text_fragments(snapshot),
         "accessibility_projection": snapshot,
     }
     output_path = Path(request["output_dir"]).resolve(strict=False) / "inspection.json"
@@ -160,6 +240,8 @@ def inspect_document(
             "revision_sha256": revision,
             "private_text_fragment_count": len(fragments),
             "private_ax_node_count": len(snapshot),
+            "private_document_text_fragment_count": len(document_text_fragments(snapshot)),
+            "raw_ax_projection_sha256": snapshot_sha256(snapshot),
             "oauth_used": False,
         },
         artifacts=[private_artifact(output_path, "google-docs-browser-inspection")],
@@ -203,8 +285,41 @@ def _validate_edit_spec(value: dict[str, Any]) -> list[dict[str, str]]:
     return normalized
 
 
-def _fragment_contains(fragments: list[str], text: str) -> bool:
-    return any(text in fragment for fragment in fragments)
+def _normalized_observed_text(value: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value).replace("\u00a0", " ")).strip()
+
+
+def _snapshot_contains_text(snapshot: list[dict[str, Any]], text: str) -> bool:
+    expected = _normalized_observed_text(text)
+    if not expected:
+        return False
+    values: list[str] = []
+    for row in snapshot:
+        for key in ("name", "value"):
+            value = row.get(key)
+            if isinstance(value, str) and value.strip():
+                normalized = _normalized_observed_text(value)
+                if expected in normalized:
+                    return True
+                values.append(value)
+
+    # Docs often exposes one logical suggestion as consecutive InlineTextBox
+    # fragments. Preserve order and try both natural-space and exact adjacency
+    # without weakening the comparison to unordered token matching.
+    maximum = min(len(values), 96)
+    for start in range(len(values)):
+        spaced = ""
+        adjacent = ""
+        for value in values[start:start + maximum]:
+            spaced = f"{spaced} {value}" if spaced else value
+            adjacent += value
+            if expected in _normalized_observed_text(spaced):
+                return True
+            if expected in _normalized_observed_text(adjacent):
+                return True
+            if len(spaced) > len(text) * 3 + 2048:
+                break
+    return False
 
 
 def _planned_text(edit: dict[str, Any]) -> str:
@@ -214,16 +329,28 @@ def _planned_text(edit: dict[str, Any]) -> str:
     return value
 
 
+def _browser_error_detail(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "invalid executor result"
+    error = result.get("error")
+    detail = error if isinstance(error, str) and error else "invalid executor result"
+    public = result.get("public")
+    action_count = public.get("action_count") if isinstance(public, dict) else None
+    if type(action_count) is int and action_count >= 0:
+        detail += f" at bounded action {action_count}"
+    return detail
+
+
 def plan_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[str, Any]:
     collaboration, document_id = _live_collaboration(request, browser)
     edit_spec_path = Path(request["arguments"]["edit_spec"]).resolve(strict=True)
     edit_spec = load_json(edit_spec_path, "edit specification")
     edits = _validate_edit_spec(edit_spec)
-    _snapshot, revision, fragments = _run_inspection(browser, collaboration, document_id)
+    snapshot, revision, _fragments = _run_inspection(browser, collaboration, document_id)
     missing = [
         index + 1
         for index, edit in enumerate(edits)
-        if "find" in edit and not _fragment_contains(fragments, edit["find"])
+        if "find" in edit and not _snapshot_contains_text(snapshot, edit["find"])
     ]
     if missing:
         raise ValueError(
@@ -324,14 +451,13 @@ def _verify_after_snapshot(
     plan: dict[str, Any],
     snapshot: list[dict[str, Any]],
 ) -> tuple[str, dict[str, Any]]:
-    after_revision = snapshot_sha256(snapshot)
+    after_revision = document_projection_sha256(snapshot)
     if after_revision == plan["revision_id"]:
         raise RuntimeError("browser read-back did not observe a changed document projection")
-    fragments = snapshot_text_fragments(snapshot)
     missing = [
         index + 1
         for index, edit in enumerate(plan["edits"])
-        if not _fragment_contains(fragments, _planned_text(edit))
+        if not _snapshot_contains_text(snapshot, _planned_text(edit))
     ]
     if missing:
         raise RuntimeError(
@@ -444,16 +570,17 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
         before_mutation=mark_pending,
     )
     if not pending_written:
-        error = result.get("error") if isinstance(result, dict) else None
         if not isinstance(result, dict) or result.get("status") != "ok":
             raise RuntimeError(
                 "browser suggestion preflight failed before authorization; no edit was sent: "
-                + (error or "invalid executor result")
+                + _browser_error_detail(result)
             )
         raise RuntimeError("browser executor returned without crossing the governed mutation boundary")
     if not isinstance(result, dict) or result.get("status") != "ok":
-        error = result.get("error") if isinstance(result, dict) else None
-        raise RuntimeError(f"browser suggestion write failed after authorization: {error or 'invalid result'}")
+        raise RuntimeError(
+            "browser suggestion write failed after authorization: "
+            + _browser_error_detail(result)
+        )
     private = result.get("private")
     after_snapshot = private.get("docs.after-ax") if isinstance(private, dict) else None
     if not isinstance(after_snapshot, list):
@@ -496,7 +623,7 @@ def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str,
         raise RuntimeError("the receipted Google Doc has an ambiguous collaboration grant")
     collaboration = matches[0]
     document_id = document_id_from_collaboration(collaboration)
-    snapshot, revision, fragments = _run_inspection(browser, collaboration, document_id)
+    snapshot, revision, _fragments = _run_inspection(browser, collaboration, document_id)
     target_matches = (
         sha256_bytes(collaboration["url"].encode("utf-8"))
         == previous.get("target_url_sha256")
@@ -510,7 +637,7 @@ def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str,
     if not isinstance(target, dict) or target.get("document_id") != document_id:
         raise ValueError("verification plan does not belong to the exposed Google Doc")
     planned_text_matches = all(
-        _fragment_contains(fragments, _planned_text(edit))
+        _snapshot_contains_text(snapshot, _planned_text(edit))
         for edit in plan.get("edits", [])
     )
     verified = target_matches and planned_text_matches
@@ -550,6 +677,8 @@ def self_test() -> dict[str, Any]:
             "active_tab_collaboration": True,
             "explicit_multi_tab_workspace": True,
             "exact_document_selection": True,
+            "bounded_document_scan": True,
+            "content_only_revision": True,
             "oauth_used": False,
         },
     )

@@ -7,8 +7,8 @@ verifies the result.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Current release: `0.8.9`
-- Shared executor requirement: `llm-wiki-chrome` `0.1.0` or later
+- Development version: `0.9.0` (unreleased)
+- Shared executor requirement: `llm-wiki-chrome` `0.1.1` or later
 
 No Google OAuth client, Picker, Drive scope, Docs API token, Workspace account,
 per-document Google grant, or persistent Docs host permission is used by this
@@ -33,21 +33,18 @@ not `<all_urls>` or a persistent `https://docs.google.com/*` permission.
 
 ## One-time setup
 
-Install the shared executor package into this adapter's isolated environment and
-install its native host:
+Install the stable shared native companion and its native host once:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install --no-deps --no-build-isolation \
-  /absolute/local/llm-wiki-chrome
-/absolute/local/llm-wiki-chrome/.venv/bin/python \
-  /absolute/local/llm-wiki-chrome/adapter.py browser-install
+brew install nvk/tap/llm-wiki-chrome
+llm-wiki-chrome install
+llm-wiki-chrome doctor
 ```
 
-Use a normal local package install rather than an editable install: cloud-backed
-workspaces can mark setuptools' editable `.pth` file hidden, causing Python to
-skip it even though `pip` reported success. Reinstall the package after updating
-the shared executor source until it has a packaged installer.
+The adapter first uses an installed `llm-wiki-chrome` Python distribution in
+its own environment. If there is none, it resolves the importable client root
+from the stable `llm-wiki-chrome` command. This avoids editable-install `.pth`
+files and session-specific source copies in cloud-backed workspaces.
 
 Load the shared executor's `extension/` directory once from
 `chrome://extensions` using **Load unpacked**. The Google adapter has no
@@ -62,19 +59,18 @@ remote capability:
   --read-root /absolute/private/google-docs-output \
   --write-root /absolute/private/google-docs-output \
   --remote-resource 'browser-collaboration:active-tab' \
-  --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR \
-  --env LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET
+  --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR
 ```
 
 This is adapter trust, not per-document authorization. Additional Docs need no
-registration change. When the shared executor uses a custom private socket,
-export `LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET` before adapter runs; the
-registry passes only its value and never stores it.
+registration change. Normal runs discover the private connector automatically.
+Keep `LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET` only for an explicit development
+or sandbox override; the registry passes only its value and never stores it.
 
 ## Collaborate on a document
 
 1. Open each page you want available to the current collaboration in normal
-   Chrome and click **LLM Wiki Browser Executor** on that tab.
+   Chrome and click **LLM Wiki for Chrome** on that tab.
 2. Give the agent the concrete edit instruction and exact document URL.
 3. The adapter selects only that document from the explicitly shared workspace.
 
@@ -120,11 +116,13 @@ or one bounded append suggestion:
 }
 ```
 
-Up to 15 non-overlapping find strings may be planned together, or one append
-may be planned alone. Immediately before the batch, the adapter reruns its
-private inspection and requires the exact approved revision fingerprint. The
-executor then enters Suggesting mode, clears and verifies each dialog value,
-preflights every find as `1 of 1`, and crosses one governed mutation boundary,
+Up to 9 non-overlapping find strings may be planned together, or one append
+may be planned alone. Inspection performs a bounded top-to-bottom AX scan and
+restores the document cursor to the start. Its revision fingerprint covers the
+Docs content projection rather than volatile editor chrome. Immediately before
+the batch, the adapter reruns that inspection and requires the exact approved
+revision fingerprint. The executor then enters Suggesting mode, clears and
+verifies each dialog value, waits for every find to settle as `1 of 1`, and crosses one governed mutation boundary,
 applies the batch, proves Suggesting mode again, and returns a private read-back
 projection. A verified receipt is emitted only when every planned text value is
 browser-visible and the projection changed. A later `verify` binds the same
@@ -142,10 +140,13 @@ response stays content-free; complete artifacts and receipts remain private.
   explicitly shared tabs.
 - Exact find/replace or one end-of-document append suggestion; no free-form
   browser programs.
-- Up to 15 edits per plan.
-- AX projection is the browser-owned planning and read-back model. The adapter
-  checks it immediately before execution; the executor does not re-hash the
-  entire volatile Docs accessibility chrome a second time.
+- Up to 9 edits per plan.
+- AX projection is the browser-owned planning and read-back model. Inspection
+  scans at most 20 viewports and 5,000 AX rows, so very large documents remain
+  explicitly bounded rather than pretending to be exhaustively read.
+- The adapter checks a content-only revision immediately before execution;
+  exact replacements are also preflighted as a unique match in Docs before the
+  governed mutation boundary.
 - Browser verification is not as semantically rich as Docs API accepted/rejected
   projections and suggestion IDs. The tradeoff removes provider OAuth and
   per-file grants while preserving an exact mutation boundary and read-back.

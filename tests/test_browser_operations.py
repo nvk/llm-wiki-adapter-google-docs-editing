@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from google_docs_adapter import __version__
-from google_docs_adapter.browser_executor import snapshot_sha256
+from google_docs_adapter.browser_executor import document_projection_sha256
 from google_docs_adapter.browser_operations import COLLABORATION_RESOURCE, execute
 from google_docs_adapter.storage import sha256_file, write_private_json
 
@@ -122,6 +124,53 @@ class BrowserOperationsTests(unittest.TestCase):
             ["receipt", "plan"],
         )
 
+    def test_isolated_adapter_bootstraps_client_from_companion_command(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            client_root = temporary_root / "client"
+            package = client_root / "browser_executor"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "client.py").write_text(
+                "class BrowserExecutorClient:\n    pass\n",
+                encoding="utf-8",
+            )
+            (client_root / ".llm-wiki-adapter.json").write_text(json.dumps({
+                "id": "browser-execution",
+                "version": "0.1.1",
+            }), encoding="utf-8")
+            command = temporary_root / "llm-wiki-chrome"
+            command.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = client-path ]; then\n"
+                f"  printf '%s\\n' '{client_root}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            command.chmod(0o700)
+            environment = dict(os.environ)
+            environment["PATH"] = f"{temporary_root}:{environment.get('PATH', '')}"
+            environment["PYTHONPATH"] = str(root)
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from google_docs_adapter.browser_operations import _default_browser; "
+                    "print(type(_default_browser()).__module__)",
+                ],
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "browser_executor.client")
+
     def test_browser_only_inspect_plan_apply_and_verify(self) -> None:
         browser = FakeBrowser()
         with tempfile.TemporaryDirectory() as temporary:
@@ -141,7 +190,7 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(inspect["status"], "ok")
             self.assertFalse(inspect["summary"]["oauth_used"])
             inspection = json.loads((root / "inspect" / "inspection.json").read_text())
-            self.assertEqual(inspection["revision_id"], snapshot_sha256(BASELINE))
+            self.assertEqual(inspection["revision_id"], document_projection_sha256(BASELINE))
             self.assertIn("Synthetic old phrase.", inspection["text_fragments"])
 
             planned = execute(self.request("plan", root / "plan", {
@@ -153,7 +202,7 @@ class BrowserOperationsTests(unittest.TestCase):
             plan_path = root / "plan" / "plan.json"
             plan = json.loads(plan_path.read_text())
             self.assertEqual(plan["schema"], "google-docs-browser-suggestion-plan/v1")
-            self.assertEqual(plan["revision_id"], snapshot_sha256(BASELINE))
+            self.assertEqual(plan["revision_id"], document_projection_sha256(BASELINE))
 
             remote_write = {
                 "plan_sha256": sha256_file(plan_path),
@@ -185,6 +234,10 @@ class BrowserOperationsTests(unittest.TestCase):
             }), browser)
             self.assertEqual(verified["status"], "ok")
             self.assertTrue(verified["summary"]["verified"])
+            verification = json.loads(
+                (root / "verify" / "verification.json").read_text()
+            )
+            self.assertTrue(verification["receipt_projection_matches"])
 
     def test_requested_document_is_selected_from_multiple_explicit_tabs(self) -> None:
         other = {
@@ -246,7 +299,7 @@ class BrowserOperationsTests(unittest.TestCase):
             }), browser)
             plan_path = root / "plan" / "plan.json"
             plan = json.loads(plan_path.read_text())
-            browser.baseline = [*BASELINE, row("button", "Synthetic changed UI")]
+            browser.baseline = [*BASELINE, row("paragraph", "Synthetic externally changed content.")]
             drifted = execute(self.request("apply", root / "apply", {
                 "collaboration_resource": COLLABORATION_RESOURCE,
                 "plan": str(plan_path),
@@ -258,6 +311,38 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(drifted["status"], "error")
             self.assertIn("changed after planning", drifted["errors"][0])
             self.assertEqual(browser.mutations, 0)
+
+    def test_volatile_editor_chrome_does_not_invalidate_document_revision(self) -> None:
+        browser = FakeBrowser()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"find": "Synthetic old phrase.", "replace": "Synthetic new phrase."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            browser.baseline = [*BASELINE, row("button", "Synthetic volatile toolbar state")]
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")},
+            ):
+                applied = execute(self.request("apply", root / "apply", {
+                    "collaboration_resource": COLLABORATION_RESOURCE,
+                    "plan": str(plan_path),
+                }, {
+                    "plan_sha256": planned["summary"]["plan_sha256"],
+                    "idempotency_key": "synthetic-volatile-ui-key",
+                    "expected_revision": plan["revision_id"],
+                }), browser)
+            self.assertEqual(applied["status"], "ok")
+            self.assertEqual(browser.mutations, 1)
 
     def test_default_journal_stays_with_the_private_plan(self) -> None:
         browser = FakeBrowser()
@@ -295,7 +380,7 @@ class BrowserOperationsTests(unittest.TestCase):
                     self.programs.append(program)
                     return {
                         "status": "error",
-                        "public": {"mutation_started": False},
+                        "public": {"mutation_started": False, "action_count": 17},
                         "private": {},
                         "error": "synthetic-private-value-mismatch",
                     }
@@ -327,6 +412,7 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(failed["status"], "error")
             self.assertIn("preflight failed before authorization", failed["errors"][0])
             self.assertIn("synthetic-private-value-mismatch", failed["errors"][0])
+            self.assertIn("bounded action 17", failed["errors"][0])
             self.assertEqual(browser.mutations, 0)
             self.assertFalse(list((plan_path.parent / ".google-docs-state").rglob("*.json")))
 
@@ -418,6 +504,42 @@ class BrowserOperationsTests(unittest.TestCase):
             report = json.loads((root / "verify" / "verification.json").read_text())
             self.assertTrue(report["planned_text_matches"])
             self.assertFalse(report["receipt_projection_matches"])
+
+    def test_readback_matches_text_split_across_accessibility_fragments(self) -> None:
+        browser = FakeBrowser()
+        browser.after = [
+            row("document", "Synthetic document"),
+            row("button", "Suggesting mode"),
+            row("InlineTextBox", "Synthetic new "),
+            row("InlineTextBox", "phrase."),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"find": "Synthetic old phrase.", "replace": "Synthetic new phrase."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")},
+            ):
+                applied = execute(self.request("apply", root / "apply", {
+                    "collaboration_resource": COLLABORATION_RESOURCE,
+                    "plan": str(plan_path),
+                }, {
+                    "plan_sha256": planned["summary"]["plan_sha256"],
+                    "idempotency_key": "synthetic-split-readback-key",
+                    "expected_revision": plan["revision_id"],
+                }), browser)
+            self.assertEqual(applied["status"], "ok")
 
 
 if __name__ == "__main__":
