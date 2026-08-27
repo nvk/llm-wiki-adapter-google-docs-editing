@@ -4,6 +4,23 @@ This provider guide is owned by the targeted `google-docs-editing` adapter. The
 public llm-wiki plugin discovers it through `adapter route`; Google-specific
 steps do not belong in llm-wiki itself.
 
+## Fresh-session fast path
+
+For a normal new agent session, do only this before provider work:
+
+1. Resolve the bundled `llm-wiki` CLI from the active wiki skill.
+2. Run `adapter route` for the exact Docs URL and requested intent.
+3. Read this guide and run `adapter doctor google-docs-editing`.
+4. Build one v1 request in a registered private input root and run it with
+   `adapter run`; put its output and response in the registered private output
+   root.
+
+Do not start by inspecting extension source, Homebrew files, sockets, browser
+internals, or general wiki articles. The registered adapter is the supported
+entry point and owns runtime bootstrap. For a read-only request, stop after a
+successful `inspect` and report the adapter version, stable revision, and
+bounded counts without printing private document text.
+
 ## User flow
 
 1. The user opens each page they want to share in their normal signed-in Chrome.
@@ -44,6 +61,12 @@ adapter selects the requested Google document by its exact document identity.
 4. If the document is not shared, tell the user only: open that exact Doc and
    click the shared executor extension. Do not open OAuth or Picker.
 
+`adapter doctor google-docs-editing` is the fresh-session health check. Do not
+substitute a `llm-wiki-chrome` executable found on `PATH`: a separate
+development or Homebrew install can describe its own packaged files rather
+than the extension currently loaded by Chrome. An `invalid-program` result from
+the registered adapter is the actionable version-mismatch signal.
+
 ## Governed edit
 
 1. Run `inspect` with the static collaboration resource and the requested URL.
@@ -72,10 +95,17 @@ adapter selects the requested Google document by its exact document identity.
 Report content-free status and counts unless the user explicitly asks to see
 document text from the private inspection artifact.
 
-If provider execution fails, stop and diagnose or create a new plan. Never
-switch to ad hoc low-level browser calls, ordinal comment controls, or manual
-find/replace loops. That bypasses the plan, revision, idempotency, and read-back
-controls and can leave a partially applied document.
+If `inspect` or the read phase of `plan` returns `cdp-command-failed` or
+`cdp-command-timeout`, wait two seconds and retry exactly once with a fresh
+private output directory. Those failures occur before mutation. If the retry
+fails, stop and report the bounded action and error; do not turn a normal user
+request into a source-code or package-manager audit. For any write failure at
+or after the governed mutation boundary, never retry with a new idempotency
+key. Diagnose the journal and receipt state first.
+
+Never switch to ad hoc low-level browser calls, ordinal comment controls, or
+manual find/replace loops. That bypasses the plan, revision, idempotency, and
+read-back controls and can leave a partially applied document.
 
 ## Session reliability
 
@@ -85,5 +115,6 @@ controls and can leave a partially applied document.
   navigation, or explicit **Stop** revokes the ephemeral grant by design.
 - Normal runs discover the private native connector automatically. Do not pin a
   per-process `s.<instance>` socket in adapter registration or shell startup.
-- If runtime loading fails, compare `llm-wiki-chrome doctor`, the extension
-  version, and this adapter's minimum executor version before planning a write.
+- If runtime loading fails, use the registered adapter error first. Inspect the
+  companion executable selected by the adapter only when that error explicitly
+  reports a missing or incompatible shared executor.
