@@ -467,6 +467,22 @@ def _same_plan_collaboration(plan: dict[str, Any], collaboration: dict[str, str]
     return document_id
 
 
+def _same_recovery_document(plan: dict[str, Any], collaboration: dict[str, str]) -> str:
+    """Accept a fresh explicit grant for read-only recovery of the same exact Doc."""
+    target = plan.get("target")
+    if not isinstance(target, dict):
+        raise ValueError("plan has no exact collaboration target")
+    document_id = document_id_from_collaboration(collaboration)
+    if (
+        target.get("document_id") != document_id
+        or target.get("url") != collaboration.get("url")
+    ):
+        raise RuntimeError(
+            "the planned Google Doc changed before recovery; expose the exact document again"
+        )
+    return document_id
+
+
 def _verify_after_snapshot(
     plan: dict[str, Any],
     snapshot: list[dict[str, Any]],
@@ -741,7 +757,10 @@ def recover_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict
     collaboration = browser.collaboration_for_url(target["url"])
     if collaboration is None:
         raise RuntimeError("the planned Google Doc is no longer exposed")
-    document_id = _same_plan_collaboration(plan, collaboration)
+    # Recovery never reapplies the edit. A browser-extension reload creates a new
+    # collaboration ID, so accept that fresh explicit grant only when its exact
+    # URL and parsed document ID still match the immutable plan target.
+    document_id = _same_recovery_document(plan, collaboration)
     snapshot, live_revision, _fragments = _run_inspection(
         browser, collaboration, document_id,
     )

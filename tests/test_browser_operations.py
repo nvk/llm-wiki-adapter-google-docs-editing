@@ -686,6 +686,35 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertIn("changed after planning", drifted["errors"][0])
             self.assertEqual(browser.mutations, 0)
 
+    def test_apply_rejects_a_reauthorized_collaboration_after_planning(self) -> None:
+        browser = FakeBrowser()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{"append": "Synthetic appended suggestion."}],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            browser.collaboration["collaboration_id"] = "e" * 64
+            applied = execute(self.request("apply", root / "apply", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "plan": str(plan_path),
+            }, {
+                "plan_sha256": planned["summary"]["plan_sha256"],
+                "idempotency_key": "synthetic-reauthorized-apply",
+                "expected_revision": plan["revision_id"],
+            }), browser)
+        self.assertEqual(applied["status"], "error")
+        self.assertIn("changed after planning", applied["errors"][0])
+        self.assertEqual(browser.mutations, 0)
+
     def test_volatile_editor_chrome_does_not_invalidate_document_revision(self) -> None:
         browser = FakeBrowser()
         with tempfile.TemporaryDirectory() as temporary:
@@ -956,6 +985,9 @@ class BrowserOperationsTests(unittest.TestCase):
                 failed = execute(apply_request, browser)
                 browser.fail_after_boundary = False
                 browser.presence_found = True
+                # Extension reloads mint a fresh collaboration grant. Recovery
+                # may consume it for the same exact Doc because it never reapplies.
+                browser.collaboration["collaboration_id"] = "e" * 64
                 recovered = execute(recover_request, browser)
                 repeated = execute(apply_request, browser)
             self.assertEqual(failed["status"], "error")
