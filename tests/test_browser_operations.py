@@ -132,7 +132,7 @@ class BrowserOperationsTests(unittest.TestCase):
             ["receipt", "plan"],
         )
 
-    def test_request_builders_create_private_inspect_and_plan_requests(self) -> None:
+    def test_request_builders_create_all_private_requests(self) -> None:
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:
             private_root = Path(temporary)
@@ -192,6 +192,78 @@ class BrowserOperationsTests(unittest.TestCase):
                             request["arguments"]["edit_spec"], str(spec.resolve())
                         )
                     self.assertEqual(request_path.stat().st_mode & 0o077, 0)
+
+            plan_path = private_root / "plan.json"
+            write_private_json(plan_path, {
+                "schema": "google-docs-browser-suggestion-plan/v1",
+                "write_transport": "shared-browser-executor-suggesting-ui",
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "revision_id": "a" * 64,
+            })
+            apply_output = private_root / "apply-output"
+            apply_request_path = private_root / "apply-request.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "scripts" / "make_apply_request.py"),
+                    "--plan",
+                    str(plan_path),
+                    "--idempotency-key",
+                    "synthetic-builder-key",
+                    "--output-dir",
+                    str(apply_output),
+                    "--request",
+                    str(apply_request_path),
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), sha256_file(plan_path))
+            apply_request = json.loads(
+                apply_request_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(apply_request["operation"], "apply")
+            self.assertEqual(
+                apply_request["arguments"]["plan"], str(plan_path.resolve())
+            )
+            self.assertEqual(apply_request_path.stat().st_mode & 0o077, 0)
+            receipt_path = private_root / "receipt.json"
+            write_private_json(receipt_path, {
+                "remote_receipt": {"plan_sha256": sha256_file(plan_path)},
+            })
+            output_dir = private_root / "verify-output"
+            request_path = private_root / "verify-request.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "scripts" / "make_verify_request.py"),
+                    "--plan",
+                    str(plan_path),
+                    "--receipt",
+                    str(receipt_path),
+                    "--output-dir",
+                    str(output_dir),
+                    "--request",
+                    str(request_path),
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            self.assertEqual(request["operation"], "verify")
+            self.assertEqual(request["arguments"]["plan"], str(plan_path.resolve()))
+            self.assertEqual(
+                request["arguments"]["receipt"], str(receipt_path.resolve())
+            )
+            self.assertEqual(request_path.stat().st_mode & 0o077, 0)
 
     def test_docs_live_region_fallback_excludes_accumulated_cursor_announcements(self) -> None:
         content = row("StaticText", "Synthetic document content.")
@@ -388,6 +460,36 @@ class BrowserOperationsTests(unittest.TestCase):
             }), browser)
         self.assertEqual(inspected["status"], "error")
         self.assertIn("synthetic-cdp-failure at bounded action 12", inspected["errors"][0])
+
+    def test_inspection_retries_transient_cdp_timeouts_inside_the_adapter(self) -> None:
+        class TransientInspectionBrowser(FakeBrowser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.failures_remaining = 2
+
+            def run(self, program: dict, **kwargs: object) -> dict:
+                if self.failures_remaining:
+                    self.failures_remaining -= 1
+                    self.programs.append(program)
+                    return {
+                        "status": "error",
+                        "public": {"action_count": 14},
+                        "private": {},
+                        "error": "cdp-command-timeout",
+                    }
+                return super().run(program, **kwargs)
+
+        browser = TransientInspectionBrowser()
+        with tempfile.TemporaryDirectory() as temporary, mock.patch(
+            "google_docs_adapter.browser_operations.time.sleep"
+        ) as sleep:
+            inspected = execute(self.request("inspect", Path(temporary), {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+            }), browser)
+        self.assertEqual(inspected["status"], "ok")
+        self.assertEqual(len(browser.programs), 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_wrong_exposed_document_and_revision_drift_fail_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

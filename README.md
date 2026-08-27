@@ -74,15 +74,22 @@ or sandbox override; the registry passes only its value and never stores it.
 2. Give the agent the concrete edit instruction and exact document URL.
 3. The adapter selects only that document from the explicitly shared workspace.
 
-Build inspect and plan requests in the registered private roots instead of
-hand-writing JSON:
+Build requests in the registered private roots instead of hand-writing JSON:
 
 ```bash
-python "$ADAPTER_ROOT/scripts/make_inspect_request.py" \
+"$ADAPTER_ROOT/scripts/make_inspect_request.py" \
   --url "$DOC_URL" --output-dir "$RUN_DIR" --request "$REQUEST"
 
-python "$ADAPTER_ROOT/scripts/make_plan_request.py" \
+"$ADAPTER_ROOT/scripts/make_plan_request.py" \
   --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
+  --output-dir "$RUN_DIR" --request "$REQUEST"
+
+"$ADAPTER_ROOT/scripts/make_apply_request.py" \
+  --plan "$PLAN" --idempotency-key "$IDEMPOTENCY_KEY" \
+  --output-dir "$RUN_DIR" --request "$REQUEST"
+
+"$ADAPTER_ROOT/scripts/make_verify_request.py" \
+  --plan "$PLAN" --receipt "$RECEIPT" \
   --output-dir "$RUN_DIR" --request "$REQUEST"
 ```
 
@@ -134,7 +141,9 @@ may be planned alone. Inspection performs a bounded top-to-bottom AX scan and
 restores the document cursor to the start. Its revision fingerprint covers the
 Docs content projection rather than volatile editor chrome. Immediately before
 the batch, the adapter reruns that inspection and requires the exact approved
-revision fingerprint. The executor then enters Suggesting mode, clears and
+revision fingerprint. Read-only inspection automatically retries up to two
+transient CDP command failures before reporting a bounded error. The executor
+then enters Suggesting mode, clears and
 verifies each dialog value, waits for every find to settle as `1 of 1`, and crosses one governed mutation boundary,
 applies the batch, proves Suggesting mode again, and returns a private read-back
 projection. A verified receipt is emitted only when every planned text value is

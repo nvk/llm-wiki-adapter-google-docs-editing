@@ -39,6 +39,9 @@ COLLABORATION_RESOURCE = "browser-collaboration:active-tab"
 INSPECTION_SCHEMA = "google-docs-browser-inspection/v1"
 PLAN_SCHEMA = "google-docs-browser-suggestion-plan/v1"
 EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
+INSPECTION_ATTEMPTS = 3
+INSPECTION_RETRY_SECONDS = 2.0
+TRANSIENT_INSPECTION_ERRORS = {"cdp-command-failed", "cdp-command-timeout"}
 
 
 class BrowserClient(Protocol):
@@ -209,9 +212,16 @@ def _run_inspection(
     collaboration: dict[str, str],
     document_id: str,
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
-    result = browser.run(compile_inspection_program(document_id, collaboration))
-    if not isinstance(result, dict) or result.get("status") != "ok":
-        raise RuntimeError(f"browser inspection failed: {_browser_error_detail(result)}")
+    program = compile_inspection_program(document_id, collaboration)
+    result: Any = None
+    for attempt in range(INSPECTION_ATTEMPTS):
+        result = browser.run(program)
+        if isinstance(result, dict) and result.get("status") == "ok":
+            break
+        error = result.get("error") if isinstance(result, dict) else None
+        if error not in TRANSIENT_INSPECTION_ERRORS or attempt + 1 >= INSPECTION_ATTEMPTS:
+            raise RuntimeError(f"browser inspection failed: {_browser_error_detail(result)}")
+        time.sleep(INSPECTION_RETRY_SECONDS)
     private = result.get("private")
     snapshot = private.get("docs.ax") if isinstance(private, dict) else None
     if not isinstance(snapshot, list):

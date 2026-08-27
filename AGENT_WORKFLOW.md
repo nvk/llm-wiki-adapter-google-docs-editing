@@ -11,18 +11,27 @@ For a normal new agent session, do only this before provider work:
 1. Resolve the bundled `llm-wiki` CLI from the active wiki skill.
 2. Run `adapter route` for the exact Docs URL and requested intent.
 3. Read this guide and run `adapter doctor google-docs-editing`.
-4. Build one v1 request in a registered private input root and run it with
+4. Build each v1 request in a registered private input root and run it with
    `adapter run`; put its output and response in the registered private output
    root.
 
-Use the adapter-owned request builders rather than hand-writing JSON:
+Use the executable adapter-owned request builders rather than hand-writing JSON
+or assuming a `python` command exists:
 
 ```bash
-python "$ADAPTER_ROOT/scripts/make_inspect_request.py" \
+"$ADAPTER_ROOT/scripts/make_inspect_request.py" \
   --url "$DOC_URL" --output-dir "$RUN_DIR" --request "$REQUEST"
 
-python "$ADAPTER_ROOT/scripts/make_plan_request.py" \
+"$ADAPTER_ROOT/scripts/make_plan_request.py" \
   --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
+  --output-dir "$RUN_DIR" --request "$REQUEST"
+
+"$ADAPTER_ROOT/scripts/make_apply_request.py" \
+  --plan "$PLAN" --idempotency-key "$IDEMPOTENCY_KEY" \
+  --output-dir "$RUN_DIR" --request "$REQUEST"
+
+"$ADAPTER_ROOT/scripts/make_verify_request.py" \
+  --plan "$PLAN" --receipt "$RECEIPT" \
   --output-dir "$RUN_DIR" --request "$REQUEST"
 ```
 
@@ -80,9 +89,10 @@ the registered adapter is the actionable version-mismatch signal.
 
 ## Governed edit
 
-1. Run `inspect` with the static collaboration resource and the requested URL.
-   The private artifact contains a bounded top-to-bottom browser AX scan and a
-   content-only revision fingerprint that excludes volatile Docs chrome.
+1. Run `inspect` with the static collaboration resource and the requested URL
+   when document text is needed to design exact replacements. If the user
+   already supplied one exact append, go directly to `plan`; planning performs
+   its own bounded inspection.
 2. Build the smallest `google-docs-edit-spec/v1` plan: up to 9 non-overlapping
    `find`/`replace` suggestions, or one `append` suggestion when no safe
    non-overlapping source text exists.
@@ -106,13 +116,12 @@ the registered adapter is the actionable version-mismatch signal.
 Report content-free status and counts unless the user explicitly asks to see
 document text from the private inspection artifact.
 
-If `inspect` or the read phase of `plan` returns `cdp-command-failed` or
-`cdp-command-timeout`, wait two seconds and retry exactly once with a fresh
-private output directory. Those failures occur before mutation. If the retry
-fails, stop and report the bounded action and error; do not turn a normal user
-request into a source-code or package-manager audit. For any write failure at
-or after the governed mutation boundary, never retry with a new idempotency
-key. Diagnose the journal and receipt state first.
+The adapter itself retries a transient `cdp-command-failed` or
+`cdp-command-timeout` during read-only inspection up to two times. If it still
+returns an error, stop and report the bounded action and error; do not add an
+outer retry or turn a normal user request into a source-code or package-manager
+audit. For any write failure at or after the governed mutation boundary, never
+retry with a new idempotency key. Diagnose the journal and receipt state first.
 
 Never switch to ad hoc low-level browser calls, ordinal comment controls, or
 manual find/replace loops. That bypasses the plan, revision, idempotency, and
