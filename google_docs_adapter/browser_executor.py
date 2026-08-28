@@ -126,8 +126,21 @@ def _document_title_identities(snapshot: list[dict[str, Any]]) -> set[str]:
 
 def _editor_chrome_identities(snapshot: list[dict[str, Any]]) -> set[str]:
     identities: set[str] = set()
-    for row in snapshot:
-        if str(row.get("role") or "").lower() not in EDITOR_CHROME_ROLES:
+    banner_index = next((
+        index
+        for index, row in enumerate(snapshot)
+        if str(row.get("role") or "").lower() == "statictext"
+        and isinstance(row.get("name"), str)
+        and _normalized_ax_text(row["name"]).casefold() == "banner hidden"
+    ), None)
+    for index, row in enumerate(snapshot):
+        role = str(row.get("role") or "").lower()
+        if role not in EDITOR_CHROME_ROLES:
+            continue
+        # InlineTextBox rows before Docs' live-region banner are toolbar chrome.
+        # Rows after it are the word-level echo of document announcements and
+        # must not cause the corresponding StaticText content to be discarded.
+        if role == "inlinetextbox" and banner_index is not None and index > banner_index:
             continue
         for key in ("name", "value"):
             value = row.get(key)
@@ -174,6 +187,12 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
             candidate_role = str(candidate.get("role") or "").lower()
             candidate_name = candidate.get("name")
             if (
+                candidate_role == "inlinetextbox"
+                and isinstance(candidate_name, str)
+                and _normalized_ax_text(candidate_name).casefold() == "banner hidden"
+            ):
+                break
+            if (
                 candidate_role == "statictext"
                 and isinstance(candidate_name, str)
                 and PAGE_ANNOUNCEMENT.fullmatch(_normalized_ax_text(candidate_name))
@@ -185,13 +204,12 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 and candidate_name.strip()
             ):
                 normalized_name = _normalized_ax_text(candidate_name)
-                if (
-                    FIND_RESULT_COUNT.fullmatch(normalized_name)
-                    or _is_volatile_or_chrome_text(
-                        normalized_name,
-                        titles=titles,
-                        chrome=chrome,
-                    )
+                if FIND_RESULT_COUNT.fullmatch(normalized_name):
+                    break
+                if _is_volatile_or_chrome_text(
+                    normalized_name,
+                    titles=titles,
+                    chrome=chrome,
                 ):
                     continue
                 projection.append(dict(candidate))
@@ -211,10 +229,22 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
         and row["name"].replace("\u00a0", " ").strip().casefold() == "banner hidden"
     ), None)
     if banner_index is not None:
-        live_segment = snapshot[banner_index + 1:]
+        inline_banner_index = next((
+            index
+            for index, row in enumerate(snapshot[banner_index + 1:], banner_index + 1)
+            if str(row.get("role") or "").lower() == "inlinetextbox"
+            and isinstance(row.get("name"), str)
+            and row["name"].replace("\u00a0", " ").strip().casefold() == "banner hidden"
+        ), None)
+        # The first InlineTextBox echo of "Banner hidden" terminates Docs'
+        # screen-reader live region. StaticText rows after it belong to editor,
+        # comment, and suggestion-card UI rather than the document projection.
+        live_segment = snapshot[
+            banner_index + 1:inline_banner_index
+            if inline_banner_index is not None else len(snapshot)
+        ]
         live_rows: list[dict[str, Any]] = []
         seen: set[str] = set()
-        skip_next_find_text = False
         for row in live_segment:
             role = str(row.get("role") or "").lower()
             name = row.get("name")
@@ -222,16 +252,15 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
             normalized_name = _normalized_ax_text(name)
             if FIND_RESULT_COUNT.fullmatch(normalized_name):
-                skip_next_find_text = True
-                continue
+                # A Find announcement is followed by volatile match context,
+                # the query, and selection state. None is stable document
+                # content, so discard the remainder of this live-region turn.
+                break
             if _is_volatile_or_chrome_text(
                 normalized_name,
                 titles=titles,
                 chrome=chrome,
             ):
-                continue
-            if skip_next_find_text:
-                skip_next_find_text = False
                 continue
             candidate = dict(row)
             identity = json.dumps(
@@ -731,6 +760,81 @@ def compile_suggestion_presence_program(
     ])
     return _program(
         program_id="google-docs-suggestion-presence-v1",
+        plan_sha256=plan_sha256,
+        capability="mutation",
+        target=_target(document_id, collaboration),
+        actions=actions,
+        private_slots=list(private_values),
+        private_fields=[],
+        timeout_ms=60_000,
+    ), private_values
+
+
+def compile_source_preflight_program(
+    document_id: str,
+    plan_sha256: str,
+    edits: list[dict[str, Any]],
+    collaboration: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Compile exact unique Docs Find checks without changing document content."""
+    if not SHA256.fullmatch(plan_sha256):
+        raise ValueError("plan_sha256 must be lowercase hexadecimal SHA-256")
+    if not isinstance(edits, list) or not 1 <= len(edits) <= MAX_BROWSER_EDITS:
+        raise ValueError(f"source preflights require 1-{MAX_BROWSER_EDITS} edits")
+    private_values: dict[str, str] = {}
+    actions = [
+        {"op": "open_or_focus_exact_url"},
+        {"op": "assert_exact_target"},
+        {"op": "attach_debugger"},
+        *_ready_actions(),
+        *_dialog_actions(),
+    ]
+    for index, edit in enumerate(edits):
+        if not isinstance(edit, dict) or set(edit) != {"find", "replace"}:
+            raise ValueError("source preflights require exact replacements")
+        source = edit.get("find")
+        if not isinstance(source, str) or not source:
+            raise ValueError("source preflight text must be non-empty")
+        if len(source.encode("utf-8")) > MAX_PRIVATE_VALUE_BYTES:
+            raise ValueError("source preflight text is too large for the shared executor")
+        slot = f"source.{index:03d}.text"
+        private_values[slot] = source
+        actions.extend([
+            {
+                "op": "focus_ax",
+                "locator": {"role": "textbox", "name": "Find", "unique": True},
+            },
+            {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
+            {"op": "dispatch_key_chord", "keys": ["backspace"]},
+            {
+                "op": "focus_ax",
+                "locator": {"role": "textbox", "name": "Find", "unique": True},
+            },
+            {"op": "insert_private_text", "slot": slot, "replace_all": False},
+            {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
+            {
+                "op": "wait_ax",
+                "locator": {
+                    "name": "1 of 1",
+                    "within_name_contains_any": list(FIND_RESULT_ANCESTORS),
+                },
+                "timeout_ms": FIND_RESULT_TIMEOUT_MS,
+            },
+        ])
+    # Text entry is confined to Docs' Find field. Keep the governed boundary
+    # last so no action after it can modify document content.
+    actions.extend([
+        {"op": "dispatch_key_chord", "keys": ["escape"]},
+        {
+            "op": "wait_ax",
+            "locator": {"role": "button", "name_contains": "suggesting"},
+            "timeout_ms": 5_000,
+        },
+        {"op": "before_mutation"},
+        {"op": "detach_debugger"},
+    ])
+    return _program(
+        program_id="google-docs-source-preflight-v1",
         plan_sha256=plan_sha256,
         capability="mutation",
         target=_target(document_id, collaboration),

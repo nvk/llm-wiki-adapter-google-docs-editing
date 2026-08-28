@@ -1,6 +1,6 @@
 [project]
 name = "llm-wiki-adapter-google-docs-editing"
-version = "0.9.2"
+version = "0.9.3"
 requires-python = ">=3.9"
 description = "Google Docs tracked-suggestions adapter for llm-wiki"
 

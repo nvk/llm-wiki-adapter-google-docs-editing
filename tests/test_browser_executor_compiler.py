@@ -12,6 +12,7 @@ from google_docs_adapter.browser_executor import (
     MAX_SHADOW_EDITS,
     canonical_program_sha256,
     compile_inspection_program,
+    compile_source_preflight_program,
     compile_suggestion_presence_program,
     compile_suggestion_program,
 )
@@ -154,9 +155,15 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             [{"append": "Synthetic appended suggestion."}],
             COLLABORATION,
         )
+        source_program, _values = compile_source_preflight_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [{"find": "Synthetic old", "replace": "Synthetic new"}],
+            COLLABORATION,
+        )
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "program.json"
-            for program in (suggestion_program, presence_program):
+            for program in (suggestion_program, presence_program, source_program):
                 path.write_text(json.dumps(program), encoding="utf-8")
                 completed = subprocess.run(
                     [
@@ -308,6 +315,30 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             "op": "wait_ax",
             "locator": {
                 "name_matches": r"^1 of [1-9][0-9]*$",
+                "within_name_contains_any": ["Find and replace"],
+            },
+            "timeout_ms": 15_000,
+        }, flat[:boundary])
+
+    def test_source_preflight_requires_one_unique_exact_find_result(self) -> None:
+        text = "Synthetic source text."
+        program, private_values = compile_source_preflight_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [{"find": text, "replace": "Synthetic replacement."}],
+            COLLABORATION,
+        )
+        self.assertNotIn(text, json.dumps(program))
+        self.assertEqual(private_values, {"source.000.text": text})
+        flat = flatten(program["actions"])
+        operations = [action["op"] for action in flat]
+        boundary = operations.index("before_mutation")
+        self.assertEqual(operations[boundary + 1 :], ["detach_debugger"])
+        self.assertEqual(operations[:boundary].count("insert_private_text"), 1)
+        self.assertIn({
+            "op": "wait_ax",
+            "locator": {
+                "name": "1 of 1",
                 "within_name_contains_any": ["Find and replace"],
             },
             "timeout_ms": 15_000,

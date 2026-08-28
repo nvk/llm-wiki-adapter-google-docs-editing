@@ -128,7 +128,9 @@ the registered adapter is the actionable version-mismatch signal.
    `find`/`replace` suggestions, or one `append` suggestion when no safe
    non-overlapping source text exists.
 3. Run `plan`. It binds the plan to the selected collaboration ID, exact live
-   URL, document ID, and revision fingerprint.
+   URL, document ID, and revision fingerprint. When Docs virtualizes the exact
+   source outside the accessibility snapshot, planning proves one unique match
+   through the bounded Find dialog, then refreshes the content-only revision.
 4. Pass the plan's hash internally through `--approve-remote-write`, use a
    caller-stable idempotency key, and pass the plan revision as
    `expected_revision`. Never ask the user to copy an approval hash.

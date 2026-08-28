@@ -63,6 +63,7 @@ class FakeBrowser:
         self.programs: list[dict] = []
         self.mutations = 0
         self.presence_probes = 0
+        self.source_preflights = 0
 
     def collaborations(self) -> list[dict[str, str]]:
         return [dict(self.collaboration)] if self.collaboration else []
@@ -93,6 +94,14 @@ class FakeBrowser:
                 "public": {"mutation_started": True},
                 "private": {},
                 "error": None if self.presence_found else "synthetic-text-not-found",
+            }
+        if program["program_id"] == "google-docs-source-preflight-v1":
+            self.source_preflights += 1
+            return {
+                "status": "ok" if self.presence_found else "error",
+                "public": {"mutation_started": True},
+                "private": {},
+                "error": None if self.presence_found else "synthetic-source-not-found",
             }
         self.mutations += 1
         if self.fail_after_boundary:
@@ -448,6 +457,52 @@ class BrowserOperationsTests(unittest.TestCase):
             document_projection_sha256(with_find_result),
         )
 
+    def test_docs_live_region_stops_before_find_and_comment_ui(self) -> None:
+        transient_only = [
+            row("RootWebArea", "Synthetic report - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "# Synthetic report"),
+            row("StaticText", "Entered suggesting mode."),
+            row("StaticText", "1 of 1"),
+            row("StaticText", "Synthetic matching line"),
+            row("StaticText", "Synthetic exact Find query"),
+            row("StaticText", "Selected"),
+            row("StaticText", "Unselected"),
+            row("InlineTextBox", "Banner hidden\u00a0"),
+            row("StaticText", "Reply or add others with @"),
+            row("StaticText", "Synthetic suggestion card"),
+        ]
+        with self.assertRaisesRegex(ValueError, "stable document content"):
+            document_projection(transient_only)
+
+        page_find_and_comment_only = [
+            row("RootWebArea", "Synthetic report - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "On page 1."),
+            row("StaticText", "1 of 1"),
+            row("StaticText", "Synthetic exact Find query"),
+            row("InlineTextBox", "Banner hidden\u00a0"),
+            row("StaticText", "Synthetic suggestion card"),
+        ]
+        with self.assertRaisesRegex(ValueError, "stable document content"):
+            document_projection(page_find_and_comment_only)
+
+    def test_docs_live_region_keeps_content_before_inline_banner_only(self) -> None:
+        content = row("StaticText", "Synthetic suggested document text.")
+        snapshot = [
+            row("RootWebArea", "Synthetic report - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "Suggested insert start"),
+            content,
+            row("StaticText", "Suggested insert end"),
+            row("StaticText", "# Synthetic report"),
+            row("InlineTextBox", "Banner hidden\u00a0"),
+            row("InlineTextBox", content["name"]),
+            row("StaticText", "Reply or add others with @"),
+            row("StaticText", "Synthetic suggestion card"),
+        ]
+        self.assertEqual(document_projection(snapshot), [content])
+
     def test_docs_live_region_ignores_mode_page_and_duplicate_editor_chrome(self) -> None:
         content = row("StaticText", "Synthetic document content that remains stable.")
         controls = [
@@ -510,16 +565,18 @@ class BrowserOperationsTests(unittest.TestCase):
             row("StaticText", "Banner hidden\u00a0"),
             row("StaticText", "Suggested insert start"),
             movable,
-            row("InlineTextBox", "Banner hidden\u00a0"),
+            row("StaticText", "Suggested insert end"),
             content,
+            row("InlineTextBox", "Banner hidden\u00a0"),
         ]
         before_marker = [
             row("RootWebArea", "Synthetic - Google Docs"),
             row("StaticText", "Banner hidden\u00a0"),
             movable,
             row("StaticText", "Suggested insert start"),
-            row("InlineTextBox", "Banner hidden\u00a0"),
+            row("StaticText", "Suggested insert end"),
             content,
+            row("InlineTextBox", "Banner hidden\u00a0"),
         ]
         self.assertEqual(
             document_projection_sha256(after_marker),
@@ -644,6 +701,38 @@ class BrowserOperationsTests(unittest.TestCase):
                 (root / "verify" / "verification.json").read_text()
             )
             self.assertTrue(verification["receipt_projection_matches"])
+
+    def test_plan_uses_unique_find_preflight_for_virtualized_source_text(self) -> None:
+        browser = FakeBrowser(baseline=[
+            row("document", "Synthetic document"),
+            row("button", "Suggesting mode"),
+            row("paragraph", "Only a virtualized fragment is exposed."),
+        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{
+                    "find": "Synthetic source outside the AX window.",
+                    "replace": "Synthetic replacement.",
+                }],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+        self.assertEqual(planned["status"], "ok")
+        self.assertEqual(browser.source_preflights, 1)
+        self.assertEqual(
+            [program["program_id"] for program in browser.programs],
+            [
+                "google-docs-inspection-v1",
+                "google-docs-source-preflight-v1",
+                "google-docs-inspection-v1",
+            ],
+        )
 
     def test_requested_document_is_selected_from_multiple_explicit_tabs(self) -> None:
         other = {

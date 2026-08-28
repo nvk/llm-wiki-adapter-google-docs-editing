@@ -18,8 +18,10 @@ from .browser_executor import (
     MAX_BROWSER_EDITS,
     assert_expected_document_url,
     compile_inspection_program,
+    compile_source_preflight_program,
     compile_suggestion_presence_program,
     compile_suggestion_program,
+    document_projection,
     document_projection_sha256,
     document_text_fragments,
     document_id_from_collaboration,
@@ -377,21 +379,78 @@ def _planned_text(edit: dict[str, Any]) -> str:
     return value
 
 
+def _probe_unique_sources(
+    browser: BrowserClient,
+    collaboration: dict[str, str],
+    document_id: str,
+    edit_spec_sha256: str,
+    edits: list[dict[str, str]],
+) -> None:
+    program_sha256 = sha256_bytes(canonical_json_bytes({
+        "purpose": "google-docs-source-preflight",
+        "collaboration_id": collaboration["collaboration_id"],
+        "target_url": collaboration["url"],
+        "edit_spec_sha256": edit_spec_sha256,
+    }))
+    program, private_values = compile_source_preflight_program(
+        document_id,
+        program_sha256,
+        edits,
+        collaboration,
+    )
+    result: Any = None
+    for attempt in range(BROWSER_TRANSIENT_ATTEMPTS):
+        crossed_boundary = False
+
+        def mark_checked() -> None:
+            nonlocal crossed_boundary
+            crossed_boundary = True
+
+        result = browser.run(
+            program,
+            private_values=private_values,
+            before_mutation=mark_checked,
+        )
+        if (
+            crossed_boundary
+            or not _is_transient_browser_error(result)
+            or attempt + 1 >= BROWSER_TRANSIENT_ATTEMPTS
+        ):
+            break
+        time.sleep(BROWSER_TRANSIENT_RETRY_SECONDS)
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        raise ValueError(
+            "exact Docs Find source preflight did not observe one unique match for every edit: "
+            + _browser_error_detail(result)
+        )
+
+
 def plan_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[str, Any]:
     collaboration, document_id = _live_collaboration(request, browser)
     edit_spec_path = Path(request["arguments"]["edit_spec"]).resolve(strict=True)
     edit_spec = load_json(edit_spec_path, "edit specification")
     edits = _validate_edit_spec(edit_spec)
     snapshot, revision, _fragments = _run_inspection(browser, collaboration, document_id)
+    stable_projection = document_projection(snapshot)
     missing = [
         index + 1
         for index, edit in enumerate(edits)
-        if "find" in edit and not _snapshot_contains_text(snapshot, edit["find"])
+        if "find" in edit and not _snapshot_contains_text(stable_projection, edit["find"])
     ]
     if missing:
-        raise ValueError(
-            "browser inspection could not find the requested source text for edit(s): "
-            + ", ".join(map(str, missing))
+        source_edits = [edit for edit in edits if "find" in edit]
+        _probe_unique_sources(
+            browser,
+            collaboration,
+            document_id,
+            sha256_file(edit_spec_path),
+            source_edits,
+        )
+        # The Find probe intentionally changes only ephemeral browser UI. Read
+        # the document again so planning and apply compare revisions from the
+        # same post-probe state rather than hashing the stale Find announcement.
+        snapshot, revision, _fragments = _run_inspection(
+            browser, collaboration, document_id,
         )
     plan = {
         "schema": PLAN_SCHEMA,
