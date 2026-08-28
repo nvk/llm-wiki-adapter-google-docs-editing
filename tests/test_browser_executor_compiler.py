@@ -202,13 +202,9 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         })
         for index, action in enumerate(flat):
             if action["op"] == "insert_private_text":
-                self.assertEqual(flat[index - 2], {
-                    "op": "dispatch_key_chord",
-                    "keys": ["document-start"],
-                })
                 self.assertEqual(flat[index - 1], {
                     "op": "dispatch_key_chord",
-                    "keys": ["shift", "document-end"],
+                    "keys": ["platform-primary", "shift", "arrow-left"],
                 })
                 self.assertEqual(flat[index + 1]["op"], "wait_ax_private_value")
                 self.assertEqual(flat[index + 1]["slot"], action["slot"])

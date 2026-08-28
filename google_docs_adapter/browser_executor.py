@@ -670,8 +670,10 @@ def _dialog_actions() -> list[dict[str, Any]]:
 def _set_focused_private_value_actions(slot: str) -> list[dict[str, Any]]:
     """Replace one focused Docs dialog field without its document-wide Cmd+A."""
     return [
-        {"op": "dispatch_key_chord", "keys": ["document-start"]},
-        {"op": "dispatch_key_chord", "keys": ["shift", "document-end"]},
+        {
+            "op": "dispatch_key_chord",
+            "keys": ["platform-primary", "shift", "arrow-left"],
+        },
         {"op": "insert_private_text", "slot": slot, "replace_all": False},
         {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
     ]

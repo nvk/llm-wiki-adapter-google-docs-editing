@@ -7,7 +7,7 @@ verifies the result.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.9.10`
+- Version: `0.9.11`
 - Shared executor requirement: `llm-wiki-chrome` `0.1.1` or later
 
 No Google OAuth client, Picker, Drive scope, Docs API token, Workspace account,
