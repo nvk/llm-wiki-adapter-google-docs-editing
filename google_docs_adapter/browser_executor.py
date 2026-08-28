@@ -23,16 +23,28 @@ SNAPSHOT_MAX_ITEMS = 5000
 INSPECTION_MAX_SCROLLS = 20
 PAGE_ANNOUNCEMENT = re.compile(r"^On page [0-9]+(?: of [0-9]+)?[.]?$")
 FIND_RESULT_COUNT = re.compile(r"^[0-9]+ of [0-9]+$")
+DOCS_ROOT_TITLE = re.compile(r"^(?P<title>.+?)[ ]+-[ ]+Google Docs$")
+DOCS_ROOT_BADGE_PREFIX = re.compile(r"^[0-9][ ](?=\S)")
+DOCS_TITLE_PREFIX = re.compile(r"^(?:#+[ ]*|[0-9]+[ ]{2,})")
 DOCS_LIVE_REGION_STATUS = re.compile(
     r"^(?:"
     r"Banner hidden|"
     r"Screen reader support enabled[.]?|"
+    r"Entered (?:editing|suggesting|viewing) mode[.]?|"
+    r"Entering page [0-9]+(?: of [0-9]+)?[.]?|"
+    r"On page [0-9]+(?: of [0-9]+)?[.]?|"
     r"[0-9]+ visible tabs? named .+|"
     r"Suggested insert(?: start| end| exited)?|"
     r"new line|blank"
     r")$",
     re.IGNORECASE,
 )
+
+EDITOR_CHROME_ROLES = {
+    "banner", "button", "checkbox", "combobox", "complementary", "group",
+    "inlinetextbox", "link", "listbox", "listitem", "menuitem",
+    "menuitemradio", "option", "tab", "textbox", "toolbar", "tooltip",
+}
 
 
 def canonical_program_sha256(program: dict[str, Any]) -> str:
@@ -88,25 +100,98 @@ def snapshot_text_fragments(snapshot: list[dict[str, Any]]) -> list[str]:
     return combined
 
 
+def _normalized_ax_text(value: str) -> str:
+    return value.replace("\u00a0", " ").strip()
+
+
+def _document_title_identities(snapshot: list[dict[str, Any]]) -> set[str]:
+    identities: set[str] = set()
+    for row in snapshot:
+        if str(row.get("role") or "").lower() != "rootwebarea":
+            continue
+        name = row.get("name")
+        if not isinstance(name, str):
+            continue
+        match = DOCS_ROOT_TITLE.fullmatch(_normalized_ax_text(name))
+        if match:
+            title = match.group("title")
+            identities.add(title.casefold())
+            # Docs can prefix the root accessible name with a one-digit badge
+            # count while rendering the actual document title without it.
+            identities.add(DOCS_ROOT_BADGE_PREFIX.sub("", title).casefold())
+    return identities
+
+
+def _editor_chrome_identities(snapshot: list[dict[str, Any]]) -> set[str]:
+    identities: set[str] = set()
+    for row in snapshot:
+        if str(row.get("role") or "").lower() not in EDITOR_CHROME_ROLES:
+            continue
+        for key in ("name", "value"):
+            value = row.get(key)
+            if isinstance(value, str) and value.strip():
+                identities.add(_normalized_ax_text(value).casefold())
+    return identities
+
+
+def _is_document_title_echo(value: str, titles: set[str]) -> bool:
+    candidate = value.strip()
+    while True:
+        reduced = DOCS_TITLE_PREFIX.sub("", candidate, count=1).strip()
+        if reduced == candidate:
+            break
+        candidate = reduced
+    return candidate.casefold() in titles
+
+
+def _is_volatile_or_chrome_text(
+    value: str,
+    *,
+    titles: set[str],
+    chrome: set[str],
+) -> bool:
+    return (
+        DOCS_LIVE_REGION_STATUS.fullmatch(value) is not None
+        or value.casefold() in chrome
+        or _is_document_title_echo(value, titles)
+    )
+
+
 def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return the stable Google Docs content slice, excluding volatile editor chrome."""
     snapshot_sha256(snapshot)
     projection: list[dict[str, Any]] = []
+    titles = _document_title_identities(snapshot)
+    chrome = _editor_chrome_identities(snapshot)
     for index, row in enumerate(snapshot):
         role = str(row.get("role") or "").lower()
         name = row.get("name")
         if role != "statictext" or not isinstance(name, str) or not PAGE_ANNOUNCEMENT.fullmatch(name):
             continue
-        projection.append(dict(row))
         for candidate in snapshot[index + 1:]:
             candidate_role = str(candidate.get("role") or "").lower()
             candidate_name = candidate.get("name")
             if (
                 candidate_role == "statictext"
                 and isinstance(candidate_name, str)
-                and candidate_name.strip()
-                and not PAGE_ANNOUNCEMENT.fullmatch(candidate_name)
+                and PAGE_ANNOUNCEMENT.fullmatch(_normalized_ax_text(candidate_name))
             ):
+                break
+            if (
+                candidate_role == "statictext"
+                and isinstance(candidate_name, str)
+                and candidate_name.strip()
+            ):
+                normalized_name = _normalized_ax_text(candidate_name)
+                if (
+                    FIND_RESULT_COUNT.fullmatch(normalized_name)
+                    or _is_volatile_or_chrome_text(
+                        normalized_name,
+                        titles=titles,
+                        chrome=chrome,
+                    )
+                ):
+                    continue
                 projection.append(dict(candidate))
                 break
     if projection:
@@ -133,11 +218,15 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
             name = row.get("name")
             if role != "statictext" or not isinstance(name, str) or not name.strip():
                 continue
-            normalized_name = name.replace("\u00a0", " ").strip()
+            normalized_name = _normalized_ax_text(name)
             if FIND_RESULT_COUNT.fullmatch(normalized_name):
                 skip_next_find_text = True
                 continue
-            if DOCS_LIVE_REGION_STATUS.fullmatch(normalized_name):
+            if _is_volatile_or_chrome_text(
+                normalized_name,
+                titles=titles,
+                chrome=chrome,
+            ):
                 continue
             if skip_next_find_text:
                 skip_next_find_text = False
@@ -473,6 +562,8 @@ def _mode_actions() -> list[dict[str, Any]]:
 
 
 def _dialog_actions() -> list[dict[str, Any]]:
+    find_field = {"role": "textbox", "name": "Find", "unique": True}
+    replace_field = {"role": "textbox", "name": "Replace with", "unique": True}
     return [
         {
             "op": "first_success",
@@ -486,13 +577,18 @@ def _dialog_actions() -> list[dict[str, Any]]:
                             "name_contains": "find and replace",
                         },
                     },
+                    {
+                        "op": "wait_ax",
+                        "locator": dict(find_field),
+                        "timeout_ms": 5_000,
+                    },
                 ],
                 [
                     {"op": "dispatch_key_chord", "keys": ["escape"]},
                     {"op": "dispatch_key_chord", "keys": ["platform-primary", "shift", "h"]},
                     {
                         "op": "wait_ax",
-                        "locator": {"role": "dialog", "name": "Find and replace"},
+                        "locator": dict(find_field),
                         "timeout_ms": 5_000,
                     },
                 ],
@@ -500,7 +596,12 @@ def _dialog_actions() -> list[dict[str, Any]]:
         },
         {
             "op": "wait_ax",
-            "locator": {"role": "dialog", "name": "Find and replace"},
+            "locator": dict(find_field),
+            "timeout_ms": 5_000,
+        },
+        {
+            "op": "wait_ax",
+            "locator": dict(replace_field),
             "timeout_ms": 5_000,
         },
     ]

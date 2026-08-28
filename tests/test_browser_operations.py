@@ -448,6 +448,60 @@ class BrowserOperationsTests(unittest.TestCase):
             document_projection_sha256(with_find_result),
         )
 
+    def test_docs_live_region_ignores_mode_page_and_duplicate_editor_chrome(self) -> None:
+        content = row("StaticText", "Synthetic document content that remains stable.")
+        controls = [
+            row("button", "Suggesting"),
+            row("menuitem", "Edit"),
+            row("combobox", "Arial"),
+        ]
+        first = [
+            row("RootWebArea", "Synthetic report - Google Docs"),
+            *controls,
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "# Synthetic report"),
+            row("StaticText", "Entered suggesting mode."),
+            row("StaticText", "Entering page 1 of 7."),
+            row("StaticText", "Suggesting"),
+            row("StaticText", "Edit"),
+            row("StaticText", "Arial"),
+            content,
+        ]
+        second = [
+            row("RootWebArea", "Synthetic report - Google Docs"),
+            *controls,
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "2  Synthetic report"),
+            row("StaticText", "Entered editing mode."),
+            row("StaticText", "Entering page 7 of 7."),
+            row("StaticText", "Edit"),
+            content,
+        ]
+        self.assertEqual(document_projection(first), [content])
+        self.assertEqual(
+            document_projection_sha256(first),
+            document_projection_sha256(second),
+        )
+
+    def test_docs_live_region_rejects_title_only_editor_chrome_as_a_revision(self) -> None:
+        chrome_only = [
+            row("RootWebArea", "2 Synthetic report - Google Docs"),
+            row("button", "Editing"),
+            row("menuitem", "Edit"),
+            row("combobox", "Arial"),
+            row("InlineTextBox", "Normal text"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "# Synthetic report"),
+            row("StaticText", "Entered suggesting mode."),
+            row("StaticText", "Entering page 1 of 7."),
+            row("StaticText", "Editing"),
+            row("StaticText", "Edit"),
+            row("StaticText", "Arial"),
+            row("StaticText", "Normal text"),
+        ]
+        with self.assertRaisesRegex(ValueError, "stable document content"):
+            document_projection(chrome_only)
+
     def test_live_region_revision_ignores_virtual_suggestion_marker_order(self) -> None:
         movable = row("StaticText", "Synthetic first document line.")
         content = row("StaticText", "Synthetic second document line.")
@@ -667,6 +721,47 @@ class BrowserOperationsTests(unittest.TestCase):
                 return super().run(program, **kwargs)
 
         browser = TransientInspectionBrowser()
+        with tempfile.TemporaryDirectory() as temporary, mock.patch(
+            "google_docs_adapter.browser_operations.time.sleep"
+        ) as sleep:
+            inspected = execute(self.request("inspect", Path(temporary), {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+            }), browser)
+        self.assertEqual(inspected["status"], "ok")
+        self.assertEqual(len(browser.programs), 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_inspection_retries_a_weak_title_only_projection(self) -> None:
+        weak = [
+            row("RootWebArea", "Synthetic report - Google Docs"),
+            row("button", "Editing"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "# Synthetic report"),
+            row("StaticText", "Entered editing mode."),
+        ]
+
+        class WeakThenStableBrowser(FakeBrowser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.weak_reads_remaining = 2
+
+            def run(self, program: dict, **kwargs: object) -> dict:
+                self.programs.append(program)
+                if self.weak_reads_remaining:
+                    self.weak_reads_remaining -= 1
+                    return {
+                        "status": "ok",
+                        "public": {},
+                        "private": {"docs.ax": list(weak)},
+                    }
+                return {
+                    "status": "ok",
+                    "public": {},
+                    "private": {"docs.ax": list(BASELINE)},
+                }
+
+        browser = WeakThenStableBrowser()
         with tempfile.TemporaryDirectory() as temporary, mock.patch(
             "google_docs_adapter.browser_operations.time.sleep"
         ) as sleep:
@@ -976,6 +1071,59 @@ class BrowserOperationsTests(unittest.TestCase):
                 applied["remote_receipt"]["verification"]["verification_method"],
                 "exact-docs-find-probe",
             )
+
+    def test_apply_uses_a_fresh_inspection_when_inline_readback_is_weak(self) -> None:
+        weak_after = [
+            row("RootWebArea", "Synthetic document - Google Docs"),
+            row("button", "Suggesting"),
+            row("StaticText", "Banner hidden\u00a0"),
+            row("StaticText", "# Synthetic document"),
+            row("StaticText", "Entered suggesting mode."),
+        ]
+
+        class WeakInlineReadbackBrowser(FakeBrowser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.after = list(weak_after)
+
+            def run(self, program: dict, **kwargs: object) -> dict:
+                result = super().run(program, **kwargs)
+                if program["program_id"] == "google-docs-suggestions-v2":
+                    self.baseline = list(AFTER)
+                return result
+
+        browser = WeakInlineReadbackBrowser()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{
+                    "find": "Synthetic old phrase.",
+                    "replace": "Synthetic new phrase.",
+                }],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            with mock.patch.dict(os.environ, {
+                "LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")
+            }):
+                applied = execute(self.request("apply", root / "apply", {
+                    "collaboration_resource": COLLABORATION_RESOURCE,
+                    "plan": str(plan_path),
+                }, {
+                    "plan_sha256": planned["summary"]["plan_sha256"],
+                    "idempotency_key": "synthetic-fresh-readback",
+                    "expected_revision": plan["revision_id"],
+                }), browser)
+        self.assertEqual(applied["status"], "ok")
+        self.assertEqual(browser.mutations, 1)
+        self.assertEqual(applied["remote_receipt"]["verification"]["status"], "verified")
 
     def test_pending_append_can_be_recovered_without_duplicate_mutation(self) -> None:
         browser = FakeBrowser(fail_after_boundary=True, presence_found=False)

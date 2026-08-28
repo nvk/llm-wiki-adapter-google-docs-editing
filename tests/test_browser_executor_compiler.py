@@ -211,6 +211,30 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         }, flat)
         self.assertEqual(program["result"]["private_fields"], ["docs.after-ax"])
 
+    def test_find_and_replace_readiness_uses_fields_not_a_volatile_dialog_container(self) -> None:
+        program, _private_values = compile_suggestion_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [{"find": "Synthetic old", "replace": "Synthetic new"}],
+            COLLABORATION,
+        )
+        flat = flatten(program["actions"])
+        self.assertFalse(any(
+            action.get("op") == "wait_ax"
+            and action.get("locator", {}).get("role") == "dialog"
+            for action in flat
+        ))
+        self.assertIn({
+            "op": "wait_ax",
+            "locator": {"role": "textbox", "name": "Find", "unique": True},
+            "timeout_ms": 5_000,
+        }, flat)
+        self.assertIn({
+            "op": "wait_ax",
+            "locator": {"role": "textbox", "name": "Replace with", "unique": True},
+            "timeout_ms": 5_000,
+        }, flat)
+
     def test_inspection_collects_a_bounded_document_scan_and_restores_start(self) -> None:
         program = compile_inspection_program(DOCUMENT_ID, COLLABORATION)
         flat = flatten(program["actions"])

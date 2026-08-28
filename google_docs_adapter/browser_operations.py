@@ -223,22 +223,38 @@ def _run_inspection(
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
     program = compile_inspection_program(document_id, collaboration)
     result: Any = None
+    projection_error: ValueError | None = None
     for attempt in range(BROWSER_TRANSIENT_ATTEMPTS):
         result = browser.run(program)
         if isinstance(result, dict) and result.get("status") == "ok":
-            break
+            private = result.get("private")
+            snapshot = private.get("docs.ax") if isinstance(private, dict) else None
+            if not isinstance(snapshot, list):
+                raise RuntimeError(
+                    "browser inspection did not return the private accessibility projection"
+                )
+            try:
+                revision = document_projection_sha256(snapshot)
+            except ValueError as exc:
+                projection_error = exc
+                if attempt + 1 >= BROWSER_TRANSIENT_ATTEMPTS:
+                    raise RuntimeError(
+                        "browser inspection did not expose stable document content after bounded retries"
+                    ) from exc
+                time.sleep(BROWSER_TRANSIENT_RETRY_SECONDS)
+                continue
+            return snapshot, revision, snapshot_text_fragments(snapshot)
         if (
             not _is_transient_browser_error(result)
             or attempt + 1 >= BROWSER_TRANSIENT_ATTEMPTS
         ):
             raise RuntimeError(f"browser inspection failed: {_browser_error_detail(result)}")
         time.sleep(BROWSER_TRANSIENT_RETRY_SECONDS)
-    private = result.get("private")
-    snapshot = private.get("docs.ax") if isinstance(private, dict) else None
-    if not isinstance(snapshot, list):
-        raise RuntimeError("browser inspection did not return the private accessibility projection")
-    revision = document_projection_sha256(snapshot)
-    return snapshot, revision, snapshot_text_fragments(snapshot)
+    if projection_error is not None:
+        raise RuntimeError(
+            "browser inspection did not expose stable document content after bounded retries"
+        ) from projection_error
+    raise RuntimeError("browser inspection failed without a bounded executor result")
 
 
 def inspect_document(
@@ -686,6 +702,7 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
     result_ok = isinstance(result, dict) and result.get("status") == "ok"
     private = result.get("private") if isinstance(result, dict) else None
     after_snapshot = private.get("docs.after-ax") if isinstance(private, dict) else None
+    readback_error: RuntimeError | None = None
     try:
         if not result_ok:
             raise RuntimeError(
@@ -695,9 +712,20 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
         if not isinstance(after_snapshot, list):
             raise RuntimeError("browser executor did not return the private read-back projection")
         after_revision, verification = _verify_after_snapshot(plan, after_snapshot)
-    except RuntimeError as readback_error:
+    except (RuntimeError, ValueError) as initial_readback_error:
+        try:
+            after_snapshot, _fresh_revision, _fragments = _run_inspection(
+                browser, collaboration, document_id,
+            )
+            after_revision, verification = _verify_after_snapshot(plan, after_snapshot)
+        except (RuntimeError, ValueError) as fresh_readback_error:
+            readback_error = RuntimeError(
+                f"{initial_readback_error}; fresh browser read-back failed: "
+                f"{fresh_readback_error}"
+            )
+    if readback_error is not None:
         if not _is_append_plan(plan):
-            raise
+            raise readback_error
         try:
             _probe_append_presence(
                 browser, plan, plan_sha256, collaboration, document_id,
