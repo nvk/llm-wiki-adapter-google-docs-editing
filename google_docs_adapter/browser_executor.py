@@ -672,10 +672,6 @@ def _set_focused_private_value_actions(slot: str) -> list[dict[str, Any]]:
     return [
         {
             "op": "dispatch_key_chord",
-            "keys": ["platform-primary", "arrow-right"],
-        },
-        {
-            "op": "dispatch_key_chord",
             "keys": ["platform-primary", "shift", "arrow-left"],
         },
         {"op": "insert_private_text", "slot": slot, "replace_all": False},
@@ -920,9 +916,16 @@ def compile_suggestion_program(
         {"op": "open_or_focus_exact_url"},
         {"op": "assert_exact_target"},
         {"op": "attach_debugger"},
+    ]
+    if not append_indexes:
+        # Docs retains Find/Replace values after its dialog is closed. Reloading
+        # the already revision-checked exact target resets that transient UI
+        # state without changing document content or crossing the boundary.
+        actions.append({"op": "reload_exact_target", "ignore_cache": False})
+    actions.extend([
         *_ready_actions(),
         *_mode_actions(),
-    ]
+    ])
     if append_indexes:
         actions.extend([
             {

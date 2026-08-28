@@ -195,6 +195,9 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         self.assertNotIn("baseline.sha256", private_values)
         self.assertEqual(operations[:boundary].count("wait_ax_private_value"), 2)
         self.assertEqual(operations[boundary + 1:].count("wait_ax_private_value"), 0)
+        reload_index = operations.index("reload_exact_target")
+        self.assertLess(operations.index("attach_debugger"), reload_index)
+        self.assertLess(reload_index, operations.index("before_mutation"))
         self.assertEqual(operations[boundary + 1], "click_ax")
         self.assertEqual(flat[boundary + 1]["locator"], {
             "role": "button",
@@ -202,10 +205,6 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         })
         for index, action in enumerate(flat):
             if action["op"] == "insert_private_text":
-                self.assertEqual(flat[index - 2], {
-                    "op": "dispatch_key_chord",
-                    "keys": ["platform-primary", "arrow-right"],
-                })
                 self.assertEqual(flat[index - 1], {
                     "op": "dispatch_key_chord",
                     "keys": ["platform-primary", "shift", "arrow-left"],
@@ -337,6 +336,7 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         self.assertEqual(private_values, {"verify.000.text": text})
         flat = flatten(program["actions"])
         operations = [action["op"] for action in flat]
+        self.assertNotIn("reload_exact_target", operations)
         boundary = operations.index("before_mutation")
         self.assertEqual(operations[boundary + 1 :], ["detach_debugger"])
         self.assertEqual(operations[:boundary].count("insert_private_text"), 1)
