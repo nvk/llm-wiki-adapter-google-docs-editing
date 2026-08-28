@@ -91,11 +91,11 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         after_collections = [
             action
             for action in flat[boundary + 1:]
-            if action["op"] == "collect_ax_by_scrolling"
+            if action["op"] == "extract_ax_collection"
         ]
         self.assertEqual(len(after_collections), 1)
         self.assertEqual(after_collections[0]["private_result"], "docs.after-ax")
-        self.assertEqual(after_collections[0]["max_scrolls"], 20)
+        self.assertEqual(after_collections[0]["max_items"], 5000)
         self.assertEqual(program["limits"]["max_repeat"], 20)
         self.assertEqual(len(flat), program["limits"]["max_actions"])
 
@@ -264,7 +264,7 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             "timeout_ms": 5_000,
         }, flat)
 
-    def test_inspection_collects_a_bounded_document_scan_and_restores_start(self) -> None:
+    def test_inspection_collects_one_bounded_ax_snapshot_and_restores_start(self) -> None:
         program = compile_inspection_program(DOCUMENT_ID, COLLABORATION)
         flat = flatten(program["actions"])
         editor_click = flat.index({
@@ -280,12 +280,10 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             "op": "dispatch_key_chord",
             "keys": ["escape"],
         })
-        collection = next(action for action in flat if action["op"] == "collect_ax_by_scrolling")
-        self.assertEqual(collection["scroll_anchor"], {
-            "selector": "#docs-editor",
-            "visible": True,
-        })
-        self.assertEqual(collection["max_scrolls"], 20)
+        collection = next(action for action in flat if action["op"] == "extract_ax_collection")
+        self.assertEqual(collection["locator"], {"name_matches": ".+"})
+        self.assertEqual(collection["max_items"], 5000)
+        self.assertNotIn("collect_ax_by_scrolling", [action["op"] for action in flat])
         self.assertEqual(program["limits"]["max_repeat"], 20)
         self.assertEqual(
             [action for action in flat if action["op"] == "dispatch_key_chord"].count(
