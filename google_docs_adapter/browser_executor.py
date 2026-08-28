@@ -19,7 +19,7 @@ MAX_SHADOW_EDITS = MAX_BROWSER_EDITS
 MAX_PRIVATE_VALUE_BYTES = 16_384
 SNAPSHOT_FIELDS = ["role", "name", "value", "description"]
 SNAPSHOT_LOCATOR = {"name_matches": ".+"}
-FIND_RESULT_ANCESTORS = ["Find and replace"]
+FIND_RESULT_SETTLE_MS = 500
 FIND_RESULT_TIMEOUT_MS = 15_000
 SNAPSHOT_MAX_ITEMS = 5000
 INSPECTION_MAX_SCROLLS = 20
@@ -655,8 +655,8 @@ def _preflight_edit_actions(index: int) -> list[dict[str, Any]]:
         {
             "op": "wait_ax",
             "locator": {
+                "role": "statictext",
                 "name": "1 of 1",
-                "within_name_contains_any": list(FIND_RESULT_ANCESTORS),
             },
             "timeout_ms": FIND_RESULT_TIMEOUT_MS,
         },
@@ -677,8 +677,8 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
         {
             "op": "wait_ax",
             "locator": {
+                "role": "statictext",
                 "name": "1 of 1",
-                "within_name_contains_any": list(FIND_RESULT_ANCESTORS),
             },
             "timeout_ms": FIND_RESULT_TIMEOUT_MS,
         },
@@ -736,11 +736,12 @@ def compile_suggestion_presence_program(
             },
             {"op": "insert_private_text", "slot": slot, "replace_all": False},
             {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
+            {"op": "wait_duration", "duration_ms": FIND_RESULT_SETTLE_MS},
             {
                 "op": "wait_ax",
                 "locator": {
+                    "role": "statictext",
                     "name_matches": r"^1 of [1-9][0-9]*$",
-                    "within_name_contains_any": list(FIND_RESULT_ANCESTORS),
                 },
                 "timeout_ms": FIND_RESULT_TIMEOUT_MS,
             },
@@ -812,11 +813,12 @@ def compile_source_preflight_program(
             },
             {"op": "insert_private_text", "slot": slot, "replace_all": False},
             {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
+            {"op": "wait_duration", "duration_ms": FIND_RESULT_SETTLE_MS},
             {
                 "op": "wait_ax",
                 "locator": {
+                    "role": "statictext",
                     "name": "1 of 1",
-                    "within_name_contains_any": list(FIND_RESULT_ANCESTORS),
                 },
                 "timeout_ms": FIND_RESULT_TIMEOUT_MS,
             },
