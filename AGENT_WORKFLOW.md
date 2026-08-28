@@ -154,7 +154,9 @@ document text from the private inspection artifact.
 
 The adapter itself retries a transient `cdp-command-failed` or
 `cdp-command-timeout` up to four times during read-only inspection and during a
-suggestion program only while it remains before the governed mutation boundary.
+   suggestion program only while it remains before the governed mutation boundary. For a
+   single find/replace, the executor stages and verifies both private dialog values before
+   that boundary, so the first governed action is the one bounded **Replace** click.
 If it still returns an error, stop and report the bounded action and error; do
 not add an outer retry or turn a normal user request into a source-code or
 package-manager audit. For any write failure at or after the governed mutation

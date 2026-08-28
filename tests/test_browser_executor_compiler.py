@@ -193,8 +193,13 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         boundary = operations.index("before_mutation")
         self.assertNotIn("assert_ax_private_sha256", operations)
         self.assertNotIn("baseline.sha256", private_values)
-        self.assertEqual(operations[:boundary].count("wait_ax_private_value"), 1)
-        self.assertEqual(operations[boundary + 1:].count("wait_ax_private_value"), 2)
+        self.assertEqual(operations[:boundary].count("wait_ax_private_value"), 2)
+        self.assertEqual(operations[boundary + 1:].count("wait_ax_private_value"), 0)
+        self.assertEqual(operations[boundary + 1], "click_ax")
+        self.assertEqual(flat[boundary + 1]["locator"], {
+            "role": "button",
+            "name": "Replace",
+        })
         for index, action in enumerate(flat):
             if action["op"] == "insert_private_text":
                 self.assertEqual(flat[index + 1]["op"], "wait_ax_private_value")
@@ -353,7 +358,7 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
             if action.get("op") == "wait_ax"
             and action.get("locator", {}).get("name") == "1 of 1"
         ]
-        self.assertEqual(len(result_waits), 2)
+        self.assertEqual(len(result_waits), 1)
         self.assertTrue(all(
             "role" not in action["locator"]
             and "roles" not in action["locator"]

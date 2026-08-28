@@ -692,6 +692,20 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
     ]
 
 
+def _stage_single_replacement_actions(index: int) -> list[dict[str, Any]]:
+    prefix = f"edit.{index:03d}"
+    return [
+        {
+            "op": "focus_ax",
+            "locator": {"role": "textbox", "name": "Replace with", "unique": True},
+        },
+        {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
+        {"op": "dispatch_key_chord", "keys": ["backspace"]},
+        {"op": "insert_private_text", "slot": f"{prefix}.replace", "replace_all": False},
+        {"op": "wait_ax_private_value", "slot": f"{prefix}.replace", "timeout_ms": 5_000},
+    ]
+
+
 def compile_suggestion_presence_program(
     document_id: str,
     plan_sha256: str,
@@ -908,6 +922,8 @@ def compile_suggestion_program(
         actions.extend(_dialog_actions())
         for index in range(len(edits)):
             actions.extend(_preflight_edit_actions(index))
+        if len(edits) == 1:
+            actions.extend(_stage_single_replacement_actions(0))
     actions.append({"op": "before_mutation"})
     if append_indexes:
         index = append_indexes[0]
@@ -919,6 +935,11 @@ def compile_suggestion_program(
                 "replace_all": False,
             },
         ])
+    elif len(edits) == 1:
+        actions.append({
+            "op": "click_ax",
+            "locator": {"role": "button", "name": "Replace"},
+        })
     else:
         for index in range(len(edits)):
             actions.extend(_apply_edit_actions(index))
