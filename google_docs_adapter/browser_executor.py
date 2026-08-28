@@ -672,6 +672,10 @@ def _set_focused_private_value_actions(slot: str) -> list[dict[str, Any]]:
     return [
         {
             "op": "dispatch_key_chord",
+            "keys": ["platform-primary", "arrow-right"],
+        },
+        {
+            "op": "dispatch_key_chord",
             "keys": ["platform-primary", "shift", "arrow-left"],
         },
         {"op": "insert_private_text", "slot": slot, "replace_all": False},

@@ -202,6 +202,10 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         })
         for index, action in enumerate(flat):
             if action["op"] == "insert_private_text":
+                self.assertEqual(flat[index - 2], {
+                    "op": "dispatch_key_chord",
+                    "keys": ["platform-primary", "arrow-right"],
+                })
                 self.assertEqual(flat[index - 1], {
                     "op": "dispatch_key_chord",
                     "keys": ["platform-primary", "shift", "arrow-left"],
