@@ -1,7 +1,7 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Edit Google Docs with tracked suggestions through explicitly shared browser tabs.",
   "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],

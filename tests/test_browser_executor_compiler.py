@@ -194,8 +194,11 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
                 self.assertEqual(flat[index + 1]["slot"], action["slot"])
         self.assertIn({
             "op": "wait_ax",
-            "locator": {"role": "statictext", "name": "1 of 1"},
-            "timeout_ms": 5_000,
+            "locator": {
+                "name": "1 of 1",
+                "within_name_contains_any": ["Find and replace"],
+            },
+            "timeout_ms": 15_000,
         }, flat[:boundary])
         self.assertIn({
             "op": "focus_ax",
@@ -304,11 +307,31 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
         self.assertIn({
             "op": "wait_ax",
             "locator": {
-                "role": "statictext",
                 "name_matches": r"^1 of [1-9][0-9]*$",
+                "within_name_contains_any": ["Find and replace"],
             },
-            "timeout_ms": 5_000,
+            "timeout_ms": 15_000,
         }, flat[:boundary])
+
+    def test_find_result_locators_scope_current_count_without_ax_role_casing(self) -> None:
+        program, _private_values = compile_suggestion_program(
+            DOCUMENT_ID,
+            PLAN_SHA256,
+            [{"find": "Synthetic old", "replace": "Synthetic new"}],
+            COLLABORATION,
+        )
+        result_waits = [
+            action for action in flatten(program["actions"])
+            if action.get("op") == "wait_ax"
+            and action.get("locator", {}).get("name") == "1 of 1"
+        ]
+        self.assertEqual(len(result_waits), 2)
+        self.assertTrue(all(
+            action["locator"].get("within_name_contains_any") == ["Find and replace"]
+            and "role" not in action["locator"]
+            and "roles" not in action["locator"]
+            for action in result_waits
+        ))
 
 
 if __name__ == "__main__":
