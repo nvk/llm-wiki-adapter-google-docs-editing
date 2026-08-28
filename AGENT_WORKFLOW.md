@@ -121,7 +121,8 @@ the registered adapter is the actionable version-mismatch signal.
 ## Governed edit
 
 1. Run `inspect` with the static collaboration resource and the requested URL
-   when document text is needed to design exact replacements. If the user
+   when document text is needed to design exact replacements. Inspection first
+   dismisses any transient Find/Replace UI left by a prior bounded probe. If the user
    already supplied one exact append, go directly to `plan`; planning performs
    its own bounded inspection.
 2. Build the smallest `google-docs-edit-spec/v1` plan: up to 9 non-overlapping

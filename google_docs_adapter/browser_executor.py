@@ -500,6 +500,10 @@ def _ready_actions() -> list[dict[str, Any]]:
 
 def _bounded_snapshot_actions(private_result: str) -> list[dict[str, Any]]:
     return [
+        # A prior bounded Find/Replace probe can leave its modal open. Dismiss
+        # transient UI before focusing the editor so document-start and the
+        # scrolling scan operate on document content rather than dialog fields.
+        {"op": "dispatch_key_chord", "keys": ["escape"]},
         {
             "op": "wait_dom",
             "locator": {"selector": "#docs-editor", "visible": True},

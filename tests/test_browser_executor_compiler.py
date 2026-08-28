@@ -252,6 +252,19 @@ class BrowserExecutorCompilerTests(unittest.TestCase):
     def test_inspection_collects_a_bounded_document_scan_and_restores_start(self) -> None:
         program = compile_inspection_program(DOCUMENT_ID, COLLABORATION)
         flat = flatten(program["actions"])
+        editor_click = flat.index({
+            "op": "click_dom",
+            "locator": {"selector": "#docs-editor", "visible": True},
+        })
+        self.assertEqual(flat[editor_click - 1], {
+            "op": "wait_dom",
+            "locator": {"selector": "#docs-editor", "visible": True},
+            "timeout_ms": 5_000,
+        })
+        self.assertEqual(flat[editor_click - 2], {
+            "op": "dispatch_key_chord",
+            "keys": ["escape"],
+        })
         collection = next(action for action in flat if action["op"] == "collect_ax_by_scrolling")
         self.assertEqual(collection["scroll_anchor"], {
             "selector": "#docs-editor",
