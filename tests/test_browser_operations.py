@@ -503,6 +503,18 @@ class BrowserOperationsTests(unittest.TestCase):
         ]
         self.assertEqual(document_projection(snapshot), [content])
 
+    def test_docs_live_region_accepts_a_bounded_title_heading_as_last_resort(self) -> None:
+        heading = row("StaticText", "# Synthetic report")
+        snapshot = [
+            row("RootWebArea", "2 Synthetic report - Google Docs"),
+            row("StaticText", "Banner hidden\u00a0"),
+            heading,
+            row("InlineTextBox", "Banner hidden\u00a0"),
+            row("InlineTextBox", "# "),
+            row("InlineTextBox", "Synthetic report"),
+        ]
+        self.assertEqual(document_projection(snapshot), [heading])
+
     def test_docs_live_region_ignores_mode_page_and_duplicate_editor_chrome(self) -> None:
         content = row("StaticText", "Synthetic document content that remains stable.")
         controls = [

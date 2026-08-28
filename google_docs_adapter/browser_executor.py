@@ -244,7 +244,9 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if inline_banner_index is not None else len(snapshot)
         ]
         live_rows: list[dict[str, Any]] = []
+        bounded_title_rows: list[dict[str, Any]] = []
         seen: set[str] = set()
+        find_result_seen = False
         for row in live_segment:
             role = str(row.get("role") or "").lower()
             name = row.get("name")
@@ -252,14 +254,14 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
             normalized_name = _normalized_ax_text(name)
             if FIND_RESULT_COUNT.fullmatch(normalized_name):
+                find_result_seen = True
                 # A Find announcement is followed by volatile match context,
                 # the query, and selection state. None is stable document
                 # content, so discard the remainder of this live-region turn.
                 break
-            if _is_volatile_or_chrome_text(
-                normalized_name,
-                titles=titles,
-                chrome=chrome,
+            if (
+                DOCS_LIVE_REGION_STATUS.fullmatch(normalized_name) is not None
+                or normalized_name.casefold() in chrome
             ):
                 continue
             candidate = dict(row)
@@ -272,10 +274,33 @@ def document_projection(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if identity in seen:
                 continue
             seen.add(identity)
-            live_rows.append(candidate)
+            target = (
+                bounded_title_rows
+                if _is_document_title_echo(normalized_name, titles)
+                else live_rows
+            )
+            target.append(candidate)
         if live_rows:
             return sorted(
                 live_rows,
+                key=lambda row: json.dumps(
+                    row,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+            )
+        # A document whose visible first heading matches its file title can
+        # expose only that heading between Docs' explicit live-region markers.
+        # Accept it only as a last-resort bounded projection, never when a Find
+        # announcement made the region transient or when other content exists.
+        if (
+            inline_banner_index is not None
+            and not find_result_seen
+            and bounded_title_rows
+        ):
+            return sorted(
+                bounded_title_rows,
                 key=lambda row: json.dumps(
                     row,
                     sort_keys=True,
