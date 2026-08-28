@@ -452,6 +452,13 @@ def plan_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[st
         snapshot, revision, _fragments = _run_inspection(
             browser, collaboration, document_id,
         )
+    # A newly created suggestion can leave a transient card or live-region
+    # layer that the first bounded Escape dismisses while it is being scanned.
+    # Read once more and bind the plan to the settled post-dismissal projection
+    # that apply will observe, rather than to that one-pass transition state.
+    snapshot, revision, _fragments = _run_inspection(
+        browser, collaboration, document_id,
+    )
     plan = {
         "schema": PLAN_SCHEMA,
         "write_transport": "shared-browser-executor-suggesting-ui",

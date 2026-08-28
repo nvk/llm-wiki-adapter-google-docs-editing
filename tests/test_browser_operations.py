@@ -743,6 +743,7 @@ class BrowserOperationsTests(unittest.TestCase):
                 "google-docs-inspection-v1",
                 "google-docs-source-preflight-v1",
                 "google-docs-inspection-v1",
+                "google-docs-inspection-v1",
             ],
         )
 
