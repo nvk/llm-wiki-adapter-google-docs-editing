@@ -137,7 +137,8 @@ the registered adapter is the actionable version-mismatch signal.
    `expected_revision`. Never ask the user to copy an approval hash.
 5. Run `apply`. The adapter first repeats private inspection and requires the
    approved revision. The executor then enters Suggesting mode, clears and
-   verifies each dialog field, waits for every find to settle as `1 of 1`, or positions an
+   verifies each dialog field using field-local start/end selection rather than
+   Docs' document-wide Select All, waits for every find to settle as `1 of 1`, or positions an
    append at the exact document end, applies the plan, proves Suggesting mode
    again, and returns a private post-mutation projection.
 6. Treat success as verified only when the adapter observes every planned text

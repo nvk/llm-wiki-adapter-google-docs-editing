@@ -667,20 +667,24 @@ def _dialog_actions() -> list[dict[str, Any]]:
     ]
 
 
+def _set_focused_private_value_actions(slot: str) -> list[dict[str, Any]]:
+    """Replace one focused Docs dialog field without its document-wide Cmd+A."""
+    return [
+        {"op": "dispatch_key_chord", "keys": ["document-start"]},
+        {"op": "dispatch_key_chord", "keys": ["shift", "document-end"]},
+        {"op": "insert_private_text", "slot": slot, "replace_all": False},
+        {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
+    ]
+
+
 def _preflight_edit_actions(index: int) -> list[dict[str, Any]]:
+    slot = f"edit.{index:03d}.find"
     return [
         {
             "op": "focus_ax",
             "locator": {"role": "textbox", "name": "Find", "unique": True},
         },
-        {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
-        {"op": "dispatch_key_chord", "keys": ["backspace"]},
-        {"op": "insert_private_text", "slot": f"edit.{index:03d}.find", "replace_all": False},
-        {
-            "op": "wait_ax_private_value",
-            "slot": f"edit.{index:03d}.find",
-            "timeout_ms": 5_000,
-        },
+        *_set_focused_private_value_actions(slot),
         {
             "op": "wait_ax",
             "locator": {
@@ -698,10 +702,7 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
             "op": "focus_ax",
             "locator": {"role": "textbox", "name": "Find", "unique": True},
         },
-        {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
-        {"op": "dispatch_key_chord", "keys": ["backspace"]},
-        {"op": "insert_private_text", "slot": f"{prefix}.find", "replace_all": False},
-        {"op": "wait_ax_private_value", "slot": f"{prefix}.find", "timeout_ms": 5_000},
+        *_set_focused_private_value_actions(f"{prefix}.find"),
         {
             "op": "wait_ax",
             "locator": {
@@ -713,10 +714,7 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
             "op": "focus_ax",
             "locator": {"role": "textbox", "name": "Replace with", "unique": True},
         },
-        {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
-        {"op": "dispatch_key_chord", "keys": ["backspace"]},
-        {"op": "insert_private_text", "slot": f"{prefix}.replace", "replace_all": False},
-        {"op": "wait_ax_private_value", "slot": f"{prefix}.replace", "timeout_ms": 5_000},
+        *_set_focused_private_value_actions(f"{prefix}.replace"),
         {"op": "click_ax", "locator": {"role": "button", "name": "Replace"}},
     ]
 
@@ -728,10 +726,7 @@ def _stage_single_replacement_actions(index: int) -> list[dict[str, Any]]:
             "op": "focus_ax",
             "locator": {"role": "textbox", "name": "Replace with", "unique": True},
         },
-        {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
-        {"op": "dispatch_key_chord", "keys": ["backspace"]},
-        {"op": "insert_private_text", "slot": f"{prefix}.replace", "replace_all": False},
-        {"op": "wait_ax_private_value", "slot": f"{prefix}.replace", "timeout_ms": 5_000},
+        *_set_focused_private_value_actions(f"{prefix}.replace"),
     ]
 
 
@@ -769,14 +764,7 @@ def compile_suggestion_presence_program(
                 "op": "focus_ax",
                 "locator": {"role": "textbox", "name": "Find", "unique": True},
             },
-            {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
-            {"op": "dispatch_key_chord", "keys": ["backspace"]},
-            {
-                "op": "focus_ax",
-                "locator": {"role": "textbox", "name": "Find", "unique": True},
-            },
-            {"op": "insert_private_text", "slot": slot, "replace_all": False},
-            {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
+            *_set_focused_private_value_actions(slot),
             {"op": "wait_duration", "duration_ms": FIND_RESULT_SETTLE_MS},
             {
                 "op": "wait_ax",
@@ -845,14 +833,7 @@ def compile_source_preflight_program(
                 "op": "focus_ax",
                 "locator": {"role": "textbox", "name": "Find", "unique": True},
             },
-            {"op": "dispatch_key_chord", "keys": ["platform-primary", "a"]},
-            {"op": "dispatch_key_chord", "keys": ["backspace"]},
-            {
-                "op": "focus_ax",
-                "locator": {"role": "textbox", "name": "Find", "unique": True},
-            },
-            {"op": "insert_private_text", "slot": slot, "replace_all": False},
-            {"op": "wait_ax_private_value", "slot": slot, "timeout_ms": 5_000},
+            *_set_focused_private_value_actions(slot),
             {"op": "wait_duration", "duration_ms": FIND_RESULT_SETTLE_MS},
             {
                 "op": "wait_ax",
