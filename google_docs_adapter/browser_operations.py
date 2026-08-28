@@ -123,14 +123,14 @@ def _default_browser() -> BrowserClient:
 
     if browser_client is None or version is None:
         raise RuntimeError(
-            "llm-wiki-chrome 0.1.2 or later is not installed; install the matching native companion"
+            "llm-wiki-chrome 0.1.1 or later is not installed; install the matching native companion"
         )
     try:
         version_parts = tuple(int(part) for part in str(version).split("."))
     except ValueError as exc:
         raise RuntimeError("the shared browser executor version is invalid") from exc
-    if version_parts < (0, 1, 2):
-        raise RuntimeError("llm-wiki-chrome 0.1.2 or later is required")
+    if version_parts < (0, 1, 1):
+        raise RuntimeError("llm-wiki-chrome 0.1.1 or later is required")
     return browser_client()
 
 

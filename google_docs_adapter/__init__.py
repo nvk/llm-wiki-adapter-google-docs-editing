@@ -1,3 +1,3 @@
 """Google Docs tracked-suggestions adapter."""
 
-__version__ = "0.9.4"
+__version__ = "0.9.5"

@@ -655,7 +655,6 @@ def _preflight_edit_actions(index: int) -> list[dict[str, Any]]:
         {
             "op": "wait_ax",
             "locator": {
-                "role": "statictext",
                 "name": "1 of 1",
             },
             "timeout_ms": FIND_RESULT_TIMEOUT_MS,
@@ -677,7 +676,6 @@ def _apply_edit_actions(index: int) -> list[dict[str, Any]]:
         {
             "op": "wait_ax",
             "locator": {
-                "role": "statictext",
                 "name": "1 of 1",
             },
             "timeout_ms": FIND_RESULT_TIMEOUT_MS,
@@ -740,7 +738,6 @@ def compile_suggestion_presence_program(
             {
                 "op": "wait_ax",
                 "locator": {
-                    "role": "statictext",
                     "name_matches": r"^1 of [1-9][0-9]*$",
                 },
                 "timeout_ms": FIND_RESULT_TIMEOUT_MS,
@@ -817,7 +814,6 @@ def compile_source_preflight_program(
             {
                 "op": "wait_ax",
                 "locator": {
-                    "role": "statictext",
                     "name": "1 of 1",
                 },
                 "timeout_ms": FIND_RESULT_TIMEOUT_MS,

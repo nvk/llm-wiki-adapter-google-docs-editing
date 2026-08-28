@@ -601,7 +601,7 @@ class BrowserOperationsTests(unittest.TestCase):
             )
             (client_root / ".llm-wiki-adapter.json").write_text(json.dumps({
                 "id": "browser-execution",
-                "version": "0.1.2",
+                "version": "0.1.1",
             }), encoding="utf-8")
             command = temporary_root / "llm-wiki-chrome"
             command.write_text(
