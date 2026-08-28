@@ -1102,7 +1102,7 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(sleep.call_count, 2)
 
     def test_pending_journal_blocks_duplicate_after_boundary_failure(self) -> None:
-        browser = FakeBrowser(fail_after_boundary=True)
+        browser = FakeBrowser(fail_after_boundary=True, presence_found=False)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             spec = root / "spec.json"
@@ -1272,6 +1272,58 @@ class BrowserOperationsTests(unittest.TestCase):
             self.assertEqual(recovered["operation"], "recover")
             self.assertEqual(repeated["status"], "ok")
             self.assertEqual(repeated["operation"], "apply")
+            self.assertEqual(browser.mutations, 1)
+            self.assertEqual(browser.presence_probes, 2)
+
+    def test_pending_replacement_can_be_recovered_without_duplicate_mutation(self) -> None:
+        browser = FakeBrowser(fail_after_boundary=True, presence_found=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = root / "spec.json"
+            write_private_json(spec, {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [{
+                    "find": "Synthetic old phrase.",
+                    "replace": "Synthetic recovered phrase.",
+                }],
+            })
+            planned = execute(self.request("plan", root / "plan", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "expected_document_url": DOCUMENT_URL,
+                "edit_spec": str(spec),
+            }), browser)
+            plan_path = root / "plan" / "plan.json"
+            plan = json.loads(plan_path.read_text())
+            remote_write = {
+                "plan_sha256": planned["summary"]["plan_sha256"],
+                "idempotency_key": "synthetic-recovered-replacement",
+                "expected_revision": plan["revision_id"],
+            }
+            apply_request = self.request("apply", root / "apply", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "plan": str(plan_path),
+            }, remote_write)
+            recover_request = self.request("recover", root / "recover", {
+                "collaboration_resource": COLLABORATION_RESOURCE,
+                "plan": str(plan_path),
+            }, remote_write)
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(root / "state")},
+            ):
+                failed = execute(apply_request, browser)
+                browser.fail_after_boundary = False
+                browser.presence_found = True
+                recovered = execute(recover_request, browser)
+                repeated = execute(apply_request, browser)
+            self.assertEqual(failed["status"], "error")
+            self.assertEqual(recovered["status"], "ok")
+            self.assertEqual(recovered["operation"], "recover")
+            self.assertTrue(
+                recovered["remote_receipt"]["verification"]
+                ["replacement_text_observed_after_mutation"]
+            )
+            self.assertEqual(repeated["status"], "ok")
             self.assertEqual(browser.mutations, 1)
             self.assertEqual(browser.presence_probes, 2)
 

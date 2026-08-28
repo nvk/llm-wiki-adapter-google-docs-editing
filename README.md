@@ -7,7 +7,7 @@ verifies the result.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.9.8`
+- Version: `0.9.9`
 - Shared executor requirement: `llm-wiki-chrome` `0.1.1` or later
 
 No Google OAuth client, Picker, Drive scope, Docs API token, Workspace account,
@@ -109,10 +109,10 @@ directory is rejected so artifacts from separate attempts cannot be mixed.
 It waits for every stage, passes the exact plan hash through the llm-wiki
 approval boundary, stops on the first failure, and prints one content-free
 final status. Private requests, plans, receipts, and verification artifacts
-remain in the selected registered run directory. If Docs truncates a newly
-appended suggestion in its accessibility projection, the runner can resolve
-the pending journal through an exact Docs Find probe; it never reapplies the
-append.
+remain in the selected registered run directory. If Docs exposes a suggestion
+only through a truncated card or weak live region, the runner can resolve the
+pending journal through an exact Docs Find probe; it never reapplies the
+planned suggestion.
 
 The resulting inspect or plan request uses the static resource plus the exact
 expected URL:

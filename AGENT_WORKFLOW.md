@@ -62,8 +62,8 @@ launch another adapter operation while any adapter command is still running.
 Do not inspect helper source, `--help`, or the README when this guide already
 supplies the exact command.
 
-The runner handles an ambiguous append read-back by checking the pending
-journal and using the adapter's non-duplicating exact-text recovery operation.
+The runner handles an ambiguous read-back by checking the pending journal and
+using the adapter's non-duplicating exact-planned-text recovery operation.
 Do not manually rerun `apply`, even with the same idempotency key.
 
 Do not start by inspecting extension source, Homebrew files, sockets, browser
@@ -141,11 +141,11 @@ the registered adapter is the actionable version-mismatch signal.
    append at the exact document end, applies the plan, proves Suggesting mode
    again, and returns a private post-mutation projection.
 6. Treat success as verified only when the adapter observes every planned text
-   value in browser read-back or, for one appended suggestion that Docs exposes
-   only in a truncated suggestion card, proves the exact text through Docs'
-   Find dialog and emits a verified remote receipt. A pending journal after a
+   value in browser read-back or, when Docs exposes a suggestion only through a
+   truncated card or weak live region, proves every exact planned value through
+   Docs' Find dialog and emits a verified remote receipt. A pending journal after a
    post-boundary failure blocks duplicate retries; `recover` may prove that
-   exact append without sending it again.
+   planned suggestion without sending it again.
 7. `verify` re-checks the exact exposed document against the private plan and
    receipt. It tolerates volatile Docs UI projection changes only when every
    planned text value remains browser-visible.

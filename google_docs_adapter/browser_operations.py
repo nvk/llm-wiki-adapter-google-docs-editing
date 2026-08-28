@@ -606,15 +606,13 @@ def _is_append_plan(plan: dict[str, Any]) -> bool:
     )
 
 
-def _probe_append_presence(
+def _probe_planned_text_presence(
     browser: BrowserClient,
     plan: dict[str, Any],
     plan_sha256: str,
     collaboration: dict[str, str],
     document_id: str,
 ) -> None:
-    if not _is_append_plan(plan):
-        raise RuntimeError("exact presence recovery is limited to one append suggestion")
     program, private_values = compile_suggestion_presence_program(
         document_id,
         plan_sha256,
@@ -635,26 +633,34 @@ def _probe_append_presence(
         time.sleep(BROWSER_TRANSIENT_RETRY_SECONDS)
     if not isinstance(result, dict) or result.get("status") != "ok":
         raise RuntimeError(
-            "exact Docs Find probe did not observe the appended suggestion: "
+            "exact Docs Find probe did not observe every planned suggestion: "
             + _browser_error_detail(result)
         )
 
 
-def _append_presence_verification(
+def _presence_probe_verification(
+    plan: dict[str, Any],
     before_revision: str,
     after_revision: str,
 ) -> dict[str, Any]:
+    edits = list(plan["edits"])
     return {
         "status": "verified",
         "write_transport": "shared-browser-executor-suggesting-ui",
         "verification_method": "exact-docs-find-probe",
         "suggesting_mode_asserted_before_and_after": True,
-        "unique_find_preconditions_asserted_before_mutation": False,
-        "append_position_precondition_asserted_before_mutation": True,
+        "unique_find_preconditions_asserted_before_mutation": all(
+            "find" in edit for edit in edits
+        ),
+        "append_position_precondition_asserted_before_mutation": all(
+            "append" in edit for edit in edits
+        ),
         "planned_text_observed_after_mutation": True,
-        "replacement_text_observed_after_mutation": False,
+        "replacement_text_observed_after_mutation": all(
+            "replace" in edit for edit in edits
+        ),
         "stable_content_projection_changed": after_revision != before_revision,
-        "suggestion_count": 1,
+        "suggestion_count": len(edits),
         "before_projection_sha256": before_revision,
         "after_projection_sha256": after_revision,
     }
@@ -783,21 +789,18 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
                 f"{fresh_readback_error}"
             )
     if readback_error is not None:
-        if not _is_append_plan(plan):
-            raise readback_error
         try:
-            _probe_append_presence(
+            _probe_planned_text_presence(
                 browser, plan, plan_sha256, collaboration, document_id,
             )
         except RuntimeError as probe_error:
             raise RuntimeError(f"{readback_error}; {probe_error}") from probe_error
-        if isinstance(after_snapshot, list):
-            after_revision = document_projection_sha256(after_snapshot)
-        else:
-            after_snapshot, after_revision, _fragments = _run_inspection(
-                browser, collaboration, document_id,
-            )
-        verification = _append_presence_verification(expected_revision, after_revision)
+        after_snapshot, after_revision, _fragments = _run_inspection(
+            browser, collaboration, document_id,
+        )
+        verification = _presence_probe_verification(
+            plan, expected_revision, after_revision
+        )
         verification["target_url_sha256"] = sha256_bytes(
             plan["target"]["url"].encode("utf-8")
         )
@@ -819,10 +822,8 @@ def apply_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[s
 
 
 def recover_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict[str, Any]:
-    """Resolve a pending append journal by proving exact text without reapplying it."""
+    """Resolve a pending journal by proving exact planned text without reapplying it."""
     plan, plan_path, plan_sha256, expected_revision, idempotency_key = _validate_plan_request(request)
-    if not _is_append_plan(plan):
-        raise RuntimeError("only one pending append suggestion can be recovered automatically")
     resource = COLLABORATION_RESOURCE
     journal_path = _journal_path(idempotency_key, plan_path)
     if not journal_path.is_file():
@@ -851,11 +852,17 @@ def recover_suggestions(request: dict[str, Any], browser: BrowserClient) -> dict
     snapshot, live_revision, _fragments = _run_inspection(
         browser, collaboration, document_id,
     )
-    append_text = _planned_text(plan["edits"][0])
-    ax_text_observed = _snapshot_contains_text(snapshot, append_text)
+    planned_texts = [_planned_text(edit) for edit in plan["edits"]]
+    ax_text_observed = all(
+        _snapshot_contains_text(snapshot, text) for text in planned_texts
+    )
     if not ax_text_observed:
-        _probe_append_presence(browser, plan, plan_sha256, collaboration, document_id)
-    verification = _append_presence_verification(expected_revision, live_revision)
+        _probe_planned_text_presence(
+            browser, plan, plan_sha256, collaboration, document_id
+        )
+    verification = _presence_probe_verification(
+        plan, expected_revision, live_revision
+    )
     verification["verification_method"] = (
         "browser-ax-exact-text" if ax_text_observed else "exact-docs-find-probe"
     )
@@ -917,8 +924,8 @@ def verify_receipt(request: dict[str, Any], browser: BrowserClient) -> dict[str,
         _snapshot_contains_text(snapshot, _planned_text(edit))
         for edit in plan.get("edits", [])
     )
-    if _is_append_plan(plan) and not planned_text_matches:
-        _probe_append_presence(
+    if not planned_text_matches:
+        _probe_planned_text_presence(
             browser,
             plan,
             str(remote_receipt.get("plan_sha256", "")),
