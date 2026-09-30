@@ -1,8 +1,8 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
-  "version": "0.9.15",
-  "description": "Edit Google Docs with tracked suggestions through explicitly shared browser tabs.",
+  "version": "0.10.0",
+  "description": "Edit Google Docs with native tracked suggestions through the Docs API, with the shared browser executor retained as a legacy fallback.",
   "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],
   "capabilities": [
@@ -17,7 +17,11 @@
     "google-docs-shared-browser-executor",
     "google-docs-shared-executor-runtime-bootstrap",
     "google-docs-tracked-changes",
-    "google-docs-browser-readback-verification"
+    "google-docs-browser-readback-verification",
+    "google-docs-api-developer-preview-canary",
+    "google-docs-api-native-suggest-mode",
+    "google-docs-api-required-revision-lock",
+    "google-docs-api-suggestion-id-verification"
   ],
   "routes": [
     {
@@ -36,7 +40,7 @@
       "priority": 100
     }
   ],
-  "network": "none",
+  "network": "optional",
   "writes_wiki": false,
   "operations": {
     "self-test": {
@@ -72,6 +76,38 @@
     "verify": {
       "read_arguments": ["receipt", "plan"],
       "remote_resource_arguments": ["collaboration_resource"],
+      "requires_output_dir": true,
+      "effects": ["remote-read"]
+    },
+    "api-inspect": {
+      "read_arguments": [],
+      "remote_resource_arguments": ["api_resource"],
+      "requires_output_dir": true,
+      "effects": ["remote-read"]
+    },
+    "api-plan": {
+      "read_arguments": ["edit_spec"],
+      "remote_resource_arguments": ["api_resource"],
+      "requires_output_dir": true,
+      "effects": ["remote-read"]
+    },
+    "api-apply": {
+      "read_arguments": ["plan"],
+      "remote_resource_arguments": ["api_resource"],
+      "requires_output_dir": true,
+      "approved_plan_argument": "plan",
+      "effects": ["remote-read", "remote-write"]
+    },
+    "api-recover": {
+      "read_arguments": ["plan"],
+      "remote_resource_arguments": ["api_resource"],
+      "requires_output_dir": true,
+      "approved_plan_argument": "plan",
+      "effects": ["remote-read", "remote-write"]
+    },
+    "api-verify": {
+      "read_arguments": ["receipt", "plan"],
+      "remote_resource_arguments": ["api_resource"],
       "requires_output_dir": true,
       "effects": ["remote-read"]
     }

@@ -1,8 +1,27 @@
-# Security and content boundary
+# Security
 
-This public repository contains tool code only. Never commit real document
-content, URLs, IDs, edit specs, plans, projections, receipts, journals,
-credentials, captures, or results.
+This public repository contains tool code only. Never commit real Google Docs
+URLs or IDs, document text, edit specs, plans, receipts, journals, API
+responses, OAuth client secrets, refresh tokens, bearer tokens, or generated
+outputs.
+
+The Docs API canary accepts an already-issued bearer token only through the
+`LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN` environment variable. Register the variable
+name through llm-wiki; do not put its value in adapter registration, request
+JSON, shell arguments, logs, or files. Prefer the narrow `drive.file` scope and
+a disposable app-authorized document for live preview testing.
+
+Every remote write must use native suggest mode, an approved plan hash, the
+planned `requiredRevisionId`, a stable idempotency key, a pre-boundary private
+journal, `ALL_SAVED` status, returned suggestion IDs, and API read-back. A
+pending journal after an ambiguous response forbids a duplicate retry.
+
+Runtime inputs and outputs belong in explicitly registered external private
+roots. The adapter declares `writes_wiki: false` and never writes wiki content.
+Report suspected vulnerabilities privately to the repository owner rather than
+opening an issue containing credentials, document identifiers, or content.
+
+## Legacy browser fallback security
 
 ## Authorization
 

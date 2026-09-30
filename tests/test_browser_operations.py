@@ -133,15 +133,14 @@ class BrowserOperationsTests(unittest.TestCase):
             value["remote_write"] = remote_write
         return value
 
-    def test_manifest_uses_one_static_collaboration_capability_and_no_oauth(self) -> None:
+    def test_manifest_keeps_browser_fallback_and_adds_governed_api_operations(self) -> None:
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))
         project = (root / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn(f'version = "{__version__}"', project)
         self.assertEqual(manifest["version"], __version__)
-        self.assertEqual(manifest["network"], "none")
+        self.assertEqual(manifest["network"], "optional")
         self.assertFalse(manifest["writes_wiki"])
-        self.assertNotIn("oauth", json.dumps(manifest).lower())
         self.assertTrue(
             {"inspect", "read", "review"}.issubset(
                 set(manifest["routes"][0]["intents"])
@@ -154,6 +153,17 @@ class BrowserOperationsTests(unittest.TestCase):
             )
         self.assertEqual(
             manifest["operations"]["verify"]["read_arguments"],
+            ["receipt", "plan"],
+        )
+        for name in (
+            "api-inspect", "api-plan", "api-apply", "api-recover", "api-verify"
+        ):
+            self.assertEqual(
+                manifest["operations"][name]["remote_resource_arguments"],
+                ["api_resource"],
+            )
+        self.assertEqual(
+            manifest["operations"]["api-verify"]["read_arguments"],
             ["receipt", "plan"],
         )
 

@@ -1,204 +1,144 @@
 # Google Docs Editing Adapter
 
-Edit Google Docs with tracked suggestions from llm-wiki. The adapter plans
-exact replacements or a bounded append, applies them in Suggesting mode, and
-verifies the result.
+A governed Google Docs tracked-suggestions adapter for llm-wiki.
 
-- Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public)
+Version 0.10.0 adds a **Google Docs API Developer Preview canary** as the
+preferred transport. It creates native Docs suggestions with
+`writeControl.writeMode: SUGGEST`, locks every mutation to the planned
+`requiredRevisionId`, journals an idempotency key before the HTTP boundary, and
+verifies returned suggestion IDs with a fresh API read. The Chrome shared-tab
+transport remains available only as a legacy fallback.
+
+- Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public tool code)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.9.15`
-- Shared executor requirement: `llm-wiki-chrome` `0.1.1` or later
+- Version: `0.10.0`
+- Runtime dependencies: Python standard library only
 
-No Google OAuth client, Picker, Drive scope, Docs API token, Workspace account,
-per-document Google grant, or persistent Docs host permission is used by this
-browser path.
+## Why the API path
 
-## Architecture
+The browser path depended on Google Docs UI structure, accessibility
+projections, dialogs, focus, and an extension/native-messaging bridge. The API
+path replaces those failure points with documented document indexes, revision
+control, atomic batch updates, native suggestion IDs, and read-back.
 
-The targeted adapter owns Google Docs semantics: exact replacement and append
-planning, Suggesting-mode preparation, unique-match checks, revision
-fingerprints, idempotency, and verification. The separate public-source
-`llm-wiki-chrome` supplies only the shared typed executor.
-It cannot accept natural-language tasks or arbitrary JavaScript.
+The preview API is still pre-GA. This branch is a canary, not a claim that the
+transport is ready for public production use.
 
-Each extension click adds an ephemeral collaboration grant to a bounded
-workspace of up to 16 explicitly shared tabs. The adapter selects the exact
-requested Google document from that workspace; another shared tab being active
-does not redirect the job. A grant rotates when its tab navigates, is revoked
-on cross-origin navigation or tab close, and can be removed with **Stop** or
-**Stop all**. Grants are bound to the exact tab, URL, origin, and window and are
-held only in memory and Chrome session storage. The extension has `activeTab`,
-not `<all_urls>` or a persistent `https://docs.google.com/*` permission.
+## Canary prerequisites
 
-## One-time setup
+- Enrollment in the Google Workspace Developer Preview Program.
+- A Google Cloud project with the Docs API enabled.
+- An OAuth token authorized for the test file. Prefer `drive.file` and an
+  app-selected or app-created disposable document.
+- The token supplied at runtime as `LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN`.
 
-Install the stable shared native companion and its native host once:
+The adapter intentionally does not implement an OAuth consent flow or persist a
+refresh token yet. That keeps the first canary small and lets the live API
+contract be proven before building an optional Docs sidebar or Picker flow.
+Never commit or pass bearer tokens on the command line.
+
+## Registration
+
+Create a local virtual environment (there are no third-party packages):
 
 ```bash
-brew install nvk/tap/llm-wiki-chrome
-llm-wiki-chrome install
-llm-wiki-chrome doctor
+python3 -m venv .venv
 ```
 
-The adapter first uses an installed `llm-wiki-chrome` Python distribution in
-its own environment. If there is none, it resolves the importable client root
-from the stable `llm-wiki-chrome` command. This avoids editable-install `.pth`
-files and session-specific source copies in cloud-backed workspaces.
-
-Load the shared executor's `extension/` directory once from
-`chrome://extensions` using **Load unpacked**. The Google adapter has no
-provider-specific extension.
-
-Register this adapter once with private input/output roots and one stable
-remote capability:
+Register private roots, the API capability, and environment variable names:
 
 ```bash
-/path/to/llm-wiki adapter add "$PWD" \
+/path/to/llm-wiki adapter add "$PWD" --replace \
   --read-root /absolute/private/google-docs-input \
   --read-root /absolute/private/google-docs-output \
   --write-root /absolute/private/google-docs-output \
-  --remote-resource 'browser-collaboration:active-tab' \
+  --remote-resource 'google-docs-api:authorized-files' \
+  --env LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN \
   --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR
 ```
 
-This is adapter trust, not per-document authorization. Additional Docs need no
-registration change. Normal runs discover the private connector automatically.
-Keep `LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET` only for an explicit development
-or sandbox override; the registry passes only its value and never stores it.
+Registration stores environment-variable names, never token values. Run
+`adapter doctor google-docs-editing` after any manifest change.
 
-## Collaborate on a document
+## One serialized suggestion workflow
 
-1. Open each page you want available to the current collaboration in normal
-   Chrome and click **LLM Wiki for Chrome** on that tab.
-2. Give the agent the concrete edit instruction and exact document URL.
-3. The adapter selects only that document from the explicitly shared workspace.
+Save a private edit spec:
 
-Build requests in the registered private roots instead of hand-writing JSON:
-
-```bash
-"$ADAPTER_ROOT/scripts/make_inspect_request.py" \
-  --url "$DOC_URL" --output-dir "$RUN_DIR" --request "$REQUEST"
-
-"$ADAPTER_ROOT/scripts/make_plan_request.py" \
-  --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
-  --output-dir "$RUN_DIR" --request "$REQUEST"
-
-"$ADAPTER_ROOT/scripts/make_apply_request.py" \
-  --plan "$PLAN" --idempotency-key "$IDEMPOTENCY_KEY" \
-  --output-dir "$RUN_DIR" --request "$REQUEST"
-
-"$ADAPTER_ROOT/scripts/make_verify_request.py" \
-  --plan "$PLAN" --receipt "$RECEIPT" \
-  --output-dir "$RUN_DIR" --request "$REQUEST"
+```json
+{
+  "schema": "google-docs-edit-spec/v1",
+  "edits": [
+    {"find": "Synthetic old phrase.", "replace": "Synthetic new phrase."}
+  ]
+}
 ```
 
-For a complete authorized write, use the serialized workflow runner rather
-than launching plan, apply, and verify as separate or overlapping processes:
-
-The selected run directory may be absent or pre-created and empty. A non-empty
-directory is rejected so artifacts from separate attempts cannot be mixed.
+Then run:
 
 ```bash
-"$ADAPTER_ROOT/scripts/run_suggestion_workflow.py" \
+"$ADAPTER_ROOT/scripts/run_api_suggestion_workflow.py" \
   --llm-wiki "$LLM_WIKI" --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
   --run-dir "$RUN_DIR" --idempotency-key "$IDEMPOTENCY_KEY" \
   --approve-remote-write
 ```
 
-It waits for every stage, passes the exact plan hash through the llm-wiki
-approval boundary, stops on the first failure, and prints one content-free
-final status. Private requests, plans, receipts, and verification artifacts
-remain in the selected registered run directory. If Docs exposes a suggestion
-only through a truncated card or weak live region, the runner can resolve the
-pending journal through an exact Docs Find probe; it never reapplies the
-planned suggestion.
+The run directory must be absent or empty. The runner performs `api-plan`,
+`api-apply`, optional non-mutating `api-recover`, and `api-verify` sequentially.
+Private requests, plans, receipts, and verification artifacts stay in that
+registered external directory. Terminal output is content-free.
 
-The resulting inspect or plan request uses the static resource plus the exact
-expected URL:
+Request builders are also available for controlled individual stages:
 
-```json
-{
-  "protocol": "llm-wiki-adapter/v1",
-  "adapter_id": "google-docs-editing",
-  "operation": "plan",
-  "arguments": {
-    "collaboration_resource": "browser-collaboration:active-tab",
-    "expected_document_url": "https://docs.google.com/document/d/SYNTHETIC_DOCUMENT/edit",
-    "edit_spec": "/absolute/private/input/edit-spec.json"
-  },
-  "output_dir": "/absolute/private/output/plan",
-  "options": {}
-}
+- `scripts/make_api_inspect_request.py`
+- `scripts/make_api_plan_request.py`
+- `scripts/make_api_apply_request.py`
+- `scripts/make_api_verify_request.py`
+
+## Safety properties
+
+Every API mutation requires and verifies:
+
+1. the exact approved plan hash;
+2. the planned Docs `revisionId` as `requiredRevisionId`;
+3. `writeMode: SUGGEST` (never a silent direct edit);
+4. a stable local idempotency key and pre-boundary pending journal;
+5. `commentUpdateState: ALL_SAVED`;
+6. API-returned created suggestion IDs; and
+7. fresh read-back of the planned text under those open suggestion IDs.
+
+Exact replacements must have one source match across all tabs and cannot touch
+an existing suggestion. Canary replacements stay within one paragraph. Index
+calculations use UTF-16 code units. Multiple replacement ranges are applied
+from the end backward. An append is accepted only when the document has one
+tab.
+
+If the HTTP result is ambiguous, the journal blocks resending. Recovery reads
+the document and proves the exact API-returned suggestion IDs; it never
+reapplies them. If no returned IDs reached the journal, recovery fails closed
+for manual resolution rather than guessing which suggestion was created.
+
+## Legacy browser operations
+
+The earlier `inspect`, `plan`, `apply`, `recover`, and `verify` operations and
+the `browser-collaboration:active-tab` capability remain intact for explicit
+fallback testing. They still require `llm-wiki-chrome` 0.1.1 or later. The API
+operations are separately named `api-inspect`, `api-plan`, `api-apply`,
+`api-recover`, and `api-verify`, so transport choice cannot happen silently.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
 ```
 
-The example identifier is synthetic. Never commit a real URL, document ID,
-plan, receipt, or extracted projection.
-
-Edit specs are either exact replacements:
-
-```json
-{
-  "schema": "google-docs-edit-spec/v1",
-  "edits": [
-    {"find": "synthetic old phrase", "replace": "synthetic replacement phrase"}
-  ]
-}
-```
-
-or one bounded append suggestion:
-
-```json
-{
-  "schema": "google-docs-edit-spec/v1",
-  "edits": [
-    {"append": "synthetic appended suggestion"}
-  ]
-}
-```
-
-Up to 9 non-overlapping find strings may be planned together, or one append
-may be planned alone. Inspection performs a bounded top-to-bottom AX scan and
-restores the document cursor to the start. Its revision fingerprint covers the
-Docs content projection rather than volatile editor chrome. Immediately before
-the batch, the adapter reruns that inspection and requires the exact approved
-revision fingerprint. Read-only inspection and pre-authorization suggestion
-setup automatically retry up to four transient CDP command failures before
-reporting a bounded error. No retry is allowed after authorization. The
-executor then enters Suggesting mode, clears and
-verifies each dialog value, waits for every find to settle as `1 of 1`, and crosses one governed mutation boundary,
-applies the batch, proves Suggesting mode again, and returns a private read-back
-projection. A verified receipt is emitted only when every planned text value is
-browser-visible and the projection changed. A later `verify` binds the same
-private plan to the receipt so volatile Docs chrome does not invalidate a
-still-visible suggestion. When no state directory is configured, the
-idempotency journal stays beside the private plan under `.google-docs-state/`.
-
-Use `scripts/make_apply_request.py` to build the governed apply request from the
-private plan, then run it through llm-wiki with the exact plan hash. The terminal
-response stays content-free; complete artifacts and receipts remain private.
-
-## Limits
-
-- Google Docs only; the exact requested document must be in the bounded set of
-  explicitly shared tabs.
-- Exact find/replace or one end-of-document append suggestion; no free-form
-  browser programs.
-- Up to 9 edits per plan.
-- AX projection is the browser-owned planning and read-back model. Inspection
-  scans at most 20 viewports and 5,000 AX rows, so very large documents remain
-  explicitly bounded rather than pretending to be exhaustively read.
-- The adapter checks a content-only revision immediately before execution;
-  exact replacements are also preflighted as a unique match in Docs before the
-  governed mutation boundary.
-- Browser verification is not as semantically rich as Docs API accepted/rejected
-  projections and suggestion IDs. The tradeoff removes provider OAuth and
-  per-file grants while preserving an exact mutation boundary and read-back.
+All fixtures are synthetic. Tests use an injected fake API client and never
+need OAuth, network access, or a real document.
 
 ## Primary references
 
-- [Chrome activeTab](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab)
-- [Chrome Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
-- [Chrome Debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
-- [Chrome DevTools Protocol Accessibility](https://chromedevtools.github.io/devtools-protocol/tot/Accessibility/)
-- [Google Docs keyboard shortcuts](https://support.google.com/docs/answer/179738)
+- [Google Docs API suggestions](https://developers.google.com/workspace/docs/api/how-tos/suggestions)
+- [documents.batchUpdate](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/batchUpdate)
+- [Docs API best practices](https://developers.google.com/workspace/docs/api/how-tos/best-practices)
+- [Docs API authorization](https://developers.google.com/workspace/docs/api/auth)
+- [Google Workspace Developer Preview](https://developers.google.com/workspace/preview)

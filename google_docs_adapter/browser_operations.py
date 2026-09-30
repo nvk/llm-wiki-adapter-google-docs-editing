@@ -970,16 +970,19 @@ def self_test() -> dict[str, Any]:
     return _response(
         "self-test",
         "ok",
-        "synthetic-browser-self-test",
+        "synthetic-transport-self-test",
         summary={
             "tracked_changes_required": True,
-            "write_transport": "shared-browser-executor-suggesting-ui",
+            "preferred_write_transport": "google-docs-api-suggest-developer-preview",
+            "legacy_write_transport": "shared-browser-executor-suggesting-ui",
             "active_tab_collaboration": True,
             "explicit_multi_tab_workspace": True,
             "exact_document_selection": True,
             "bounded_document_scan": True,
             "content_only_revision": True,
             "oauth_used": False,
+            "docs_api_developer_preview_canary": True,
+            "docs_api_write_mode": "SUGGEST",
         },
     )
 
@@ -987,11 +990,16 @@ def self_test() -> dict[str, Any]:
 def execute(
     request: dict[str, Any],
     browser: BrowserClient | None = None,
+    api_client: Any | None = None,
 ) -> dict[str, Any]:
     operation = request.get("operation")
     try:
         if operation == "self-test":
             return self_test()
+        if isinstance(operation, str) and operation.startswith("api-"):
+            from .api_operations import execute_api
+
+            return execute_api(request, api_client)
         active_browser = browser or _default_browser()
         if operation == "inspect":
             return inspect_document(request, active_browser)

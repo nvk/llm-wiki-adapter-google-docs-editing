@@ -1,182 +1,145 @@
 # Google Docs editing agent workflow
 
-This provider guide is owned by the targeted `google-docs-editing` adapter. The
-public llm-wiki plugin discovers it through `adapter route`; Google-specific
-steps do not belong in llm-wiki itself.
+This adapter owns Google-specific planning, native suggestion writes, revision
+locking, idempotency, recovery, and read-back verification. The public llm-wiki
+plugin only routes and enforces the approval boundary.
+
+## Preferred transport: Google Docs API canary
+
+Use the `api-*` operations, not the browser extension, when all of these are
+true:
+
+1. the Google Cloud project and account are enrolled in the Google Workspace
+   Developer Preview Program;
+2. the Docs API is enabled;
+3. an already-issued OAuth access token is available only through
+   `LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN`; and
+4. the requested file is within that token's authorized file set.
+
+The canary deliberately does not mint or persist OAuth credentials. Prefer the
+`drive.file` scope and an app-selected or app-created test file. Keep client
+secrets, refresh tokens, access tokens, document IDs, plans, receipts, and API
+responses outside this public repository.
+
+Register the adapter with private roots, its API capability, and environment
+variable names (not values):
+
+```bash
+/path/to/llm-wiki adapter add "$ADAPTER_ROOT" --replace \
+  --read-root /absolute/private/google-docs-input \
+  --read-root /absolute/private/google-docs-output \
+  --write-root /absolute/private/google-docs-output \
+  --remote-resource 'google-docs-api:authorized-files' \
+  --env LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN \
+  --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR
+```
+
+`adapter doctor google-docs-editing` is local and does not consume the token or
+call Google. A read-only `api-inspect` is the first live enrollment and access
+check.
 
 ## Fresh-session fast path
 
-For a normal new agent session, do only this before provider work:
+1. Route the exact Docs URL and read this guide.
+2. Run `adapter doctor google-docs-editing` and stop on manifest drift.
+3. Confirm the user has authorized this exact document and concrete edit.
+4. For the first live preview test, use a disposable synthetic document.
+5. Run the serialized API workflow once and wait for its final JSON.
 
-1. Resolve the bundled `llm-wiki` CLI from the active wiki skill.
-2. Run `adapter route` for the exact Docs URL and requested intent.
-3. Read this guide and run `adapter doctor google-docs-editing`.
-4. Build each v1 request in a registered private input root and run it with
-   `adapter run`; put its output and response in the registered private output
-   root.
-
-Use the executable adapter-owned request builders rather than hand-writing JSON
-or assuming a `python` command exists:
-
-```bash
-"$ADAPTER_ROOT/scripts/make_inspect_request.py" \
-  --url "$DOC_URL" --output-dir "$RUN_DIR" --request "$REQUEST"
-
-"$ADAPTER_ROOT/scripts/make_plan_request.py" \
-  --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
-  --output-dir "$RUN_DIR" --request "$REQUEST"
-
-"$ADAPTER_ROOT/scripts/make_apply_request.py" \
-  --plan "$PLAN" --idempotency-key "$IDEMPOTENCY_KEY" \
-  --output-dir "$RUN_DIR" --request "$REQUEST"
-
-"$ADAPTER_ROOT/scripts/make_verify_request.py" \
-  --plan "$PLAN" --receipt "$RECEIPT" \
-  --output-dir "$RUN_DIR" --request "$REQUEST"
-```
-
-For an authorized write with a finished edit spec, prefer the serialized
-workflow runner so plan, apply, and verify cannot overlap:
-
-For one exact append, the complete edit-spec shape is:
+For one exact replacement, the edit spec is:
 
 ```json
-{"schema":"google-docs-edit-spec/v1","edits":[{"append":"Exact text."}]}
+{
+  "schema": "google-docs-edit-spec/v1",
+  "edits": [
+    {"find": "Synthetic old phrase.", "replace": "Synthetic new phrase."}
+  ]
+}
 ```
 
-Create that file under the registered private input root. Choose a new run
-directory under the registered private output root; it may be absent or already
-created and empty, but it must not contain artifacts from another attempt.
+For a single-tab document, one append is also supported:
+
+```json
+{
+  "schema": "google-docs-edit-spec/v1",
+  "edits": [{"append": "Synthetic appended suggestion."}]
+}
+```
+
+Create the edit spec in a registered private input root. Choose a new, empty
+run directory under a registered private output root, then run:
 
 ```bash
-"$ADAPTER_ROOT/scripts/run_suggestion_workflow.py" \
+"$ADAPTER_ROOT/scripts/run_api_suggestion_workflow.py" \
   --llm-wiki "$LLM_WIKI" --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
   --run-dir "$RUN_DIR" --idempotency-key "$IDEMPOTENCY_KEY" \
   --approve-remote-write
 ```
 
-Run only that command and wait for its final JSON. If the shell tool reports a
-running process or session ID, poll that same process with the tool's wait
-primitive until it exits. Never inspect partial artifacts, rerun planning, or
-launch another adapter operation while any adapter command is still running.
-Do not inspect helper source, `--help`, or the README when this guide already
-supplies the exact command.
+Do not launch overlapping operations, inspect partial artifacts while a stage
+is running, or rerun `api-apply`. The runner serializes plan, apply, recovery,
+and verify. It reuses the caller-stable idempotency key and never turns an
+ambiguous result into a duplicate write.
 
-The runner handles an ambiguous read-back by checking the pending journal and
-using the adapter's non-duplicating exact-planned-text recovery operation.
-Do not manually rerun `apply`, even with the same idempotency key.
+Read-only inspection can be built separately:
 
-Do not start by inspecting extension source, Homebrew files, sockets, browser
-internals, or general wiki articles. The registered adapter is the supported
-entry point and owns runtime bootstrap. For a read-only request, stop after a
-successful `inspect` and report the adapter version, stable revision, and
-bounded counts without printing private document text.
+```bash
+"$ADAPTER_ROOT/scripts/make_api_inspect_request.py" \
+  --url "$DOC_URL" --output-dir "$RUN_DIR" --request "$REQUEST"
+```
 
-## User flow
+The other request builders are `make_api_plan_request.py`,
+`make_api_apply_request.py`, and `make_api_verify_request.py`.
 
-1. The user opens each page they want to share in their normal signed-in Chrome.
-2. The user clicks **LLM Wiki for Chrome** on each such tab. Every gesture
-   adds an ephemeral grant bound to the exact tab, URL, origin, and window. The
-   workspace is capped at 16 grants.
-3. The agent uses this adapter. There is no Google OAuth, Picker,
-   per-document API grant, persistent host permission, or per-document
-   llm-wiki registration.
+## Governed API mutation
 
-The adapter and the shared browser executor are still installed and trusted
-once. Register only the stable capability
-`browser-collaboration:active-tab`; the historical capability name remains
-stable while its runtime workspace supplies explicitly shared tabs. The
-adapter selects the requested Google document by its exact document identity.
+The API path fails closed unless every write has:
+
+- an approved private plan and exact plan SHA-256;
+- a caller-stable idempotency key;
+- the raw Docs `revisionId` from planning as `requiredRevisionId`;
+- `writeControl.writeMode` set to `SUGGEST`;
+- `commentUpdateState` equal to `ALL_SAVED`;
+- created suggestion IDs returned by the API; and
+- a fresh API read-back proving the planned insertion/deletion text belongs to
+  those open suggestion IDs.
+
+Planning reads all document tabs with `SUGGESTIONS_INLINE`, resolves each exact
+source once across all tabs, handles UTF-16 indexes, and rejects a source that
+overlaps an existing suggestion. Canary replacements stay within one paragraph;
+multiple replacements are sent in descending index order. Canary appends are
+limited to single-tab documents so the target cannot be ambiguous.
+
+The adapter writes a mode-0600 pending journal before crossing the HTTP mutation
+boundary. A response timeout, preview partial failure, or failed read-back
+blocks duplicate application. `api-recover` performs only a read and can issue
+a receipt only when the original API response supplied exact suggestion IDs.
+If the response was lost before those IDs were journaled, attribution remains
+ambiguous: do not retry or automatically receipt the write.
+
+Report only the content-free terminal status unless the user explicitly asks
+to inspect private text artifacts.
 
 ## Boundaries
 
-- The repository is a content-free tool. Runtime URLs, document IDs, text,
-  edit specs, plans, receipts, journals, and accessibility projections stay in
-  registered private roots or memory.
-- A URL or collaboration click alone is not permission to invent changes. The
-  user must give a concrete edit instruction.
-- Only exact find/replace suggestions or one bounded end-of-document append are
-  accepted. No arbitrary JavaScript, browser program, Docs API mutation, or
-  silent direct edit is available.
-- Every write requires the exact approved plan hash, browser revision
-  fingerprint, stable idempotency key, one governed mutation boundary, and
-  browser read-back verification.
+- A URL, OAuth token, API grant, or route match is not write authorization.
+- Never put a bearer token in a request JSON, command line, plan, journal,
+  receipt, log, or repository file.
+- Do not use `EDIT`, omit `requiredRevisionId`, retry with a new idempotency key,
+  or bypass the approved-plan hash.
+- The native-suggestions API is Developer Preview. Do not treat it as a public
+  production feature until Google makes it generally available and the adapter
+  completes a live canary against an enrolled project.
+- The repository is tool-only. Runtime content and identifiers stay in
+  registered external private roots or memory.
 
-## Route and health
+## Legacy browser fallback
 
-1. Run `adapter route --intent edit --resource '<document-url>' --json`.
-2. Run `adapter doctor google-docs-editing --json` and stop on manifest drift.
-3. Confirm the requested Google document appears in the explicitly shared
-   workspace. The adapter selects and enforces the exact document again; the
-   currently active tab is not authoritative.
-4. If the document is not shared, tell the user only: open that exact Doc and
-   click the shared executor extension. Do not open OAuth or Picker.
+The original operations (`inspect`, `plan`, `apply`, `recover`, `verify`) still
+use `browser-collaboration:active-tab` and `llm-wiki-chrome`. They are retained
+only as an explicit fallback while the API canary is being proven. Do not choose
+them merely because the Chrome extension happens to be installed.
 
-`adapter doctor google-docs-editing` is the fresh-session health check. Do not
-substitute a `llm-wiki-chrome` executable found on `PATH`: a separate
-development or Homebrew install can describe its own packaged files rather
-than the extension currently loaded by Chrome. An `invalid-program` result from
-the registered adapter is the actionable version-mismatch signal.
-
-## Governed edit
-
-1. Run `inspect` with the static collaboration resource and the requested URL
-   when document text is needed to design exact replacements. Inspection first
-   dismisses any transient Find/Replace UI left by a prior bounded probe. If the user
-   already supplied one exact append, go directly to `plan`; planning performs
-   its own bounded inspection.
-2. Build the smallest `google-docs-edit-spec/v1` plan: up to 9 non-overlapping
-   `find`/`replace` suggestions, or one `append` suggestion when no safe
-   non-overlapping source text exists.
-3. Run `plan`. It binds the plan to the selected collaboration ID, exact live
-   URL, document ID, and revision fingerprint. When Docs virtualizes the exact
-   source outside the accessibility snapshot, planning proves one unique match
-   through the bounded Find dialog, then refreshes the content-only revision.
-4. Pass the plan's hash internally through `--approve-remote-write`, use a
-   caller-stable idempotency key, and pass the plan revision as
-   `expected_revision`. Never ask the user to copy an approval hash.
-5. Run `apply`. The adapter first repeats private inspection and requires the
-   approved revision. The executor then enters Suggesting mode, clears and
-   verifies each dialog field using field-local start/end selection rather than
-   Docs' document-wide Select All, waits for every find to settle as `1 of 1`, or positions an
-   append at the exact document end, applies the plan, proves Suggesting mode
-   again, and returns a private post-mutation projection.
-6. Treat success as verified only when the adapter observes every planned text
-   value in browser read-back or, when Docs exposes a suggestion only through a
-   truncated card or weak live region, proves every exact planned value through
-   Docs' Find dialog and emits a verified remote receipt. A pending journal after a
-   post-boundary failure blocks duplicate retries; `recover` may prove that
-   planned suggestion without sending it again.
-7. `verify` re-checks the exact exposed document against the private plan and
-   receipt. It tolerates volatile Docs UI projection changes only when every
-   planned text value remains browser-visible.
-
-Report content-free status and counts unless the user explicitly asks to see
-document text from the private inspection artifact.
-
-The adapter itself retries a transient `cdp-command-failed` or
-`cdp-command-timeout` up to four times during read-only inspection and during a
-   suggestion program only while it remains before the governed mutation boundary. For a
-   single find/replace, the executor stages and verifies both private dialog values before
-   that boundary, so the first governed action is the one bounded **Replace** click.
-If it still returns an error, stop and report the bounded action and error; do
-not add an outer retry or turn a normal user request into a source-code or
-package-manager audit. For any write failure at or after the governed mutation
-boundary, never retry with a new idempotency key. Diagnose the journal and
-receipt state first.
-
-Never switch to ad hoc low-level browser calls, ordinal comment controls, or
-manual find/replace loops. That bypasses the plan, revision, idempotency, and
-read-back controls and can leave a partially applied document.
-
-## Session reliability
-
-- A new agent session does not require another extension click while Chrome is
-  still running and the tab grant remains in extension session storage.
-- A browser restart, extension reload/update, tab close, cross-origin
-  navigation, or explicit **Stop** revokes the ephemeral grant by design.
-- Normal runs discover the private native connector automatically. Do not pin a
-  per-process `s.<instance>` socket in adapter registration or shell startup.
-- If runtime loading fails, use the registered adapter error first. Inspect the
-  companion executable selected by the adapter only when that error explicitly
-  reports a missing or incompatible shared executor.
+If preview enrollment or API authorization is unavailable, stop and explain
+that native tracked suggestions cannot yet use the API path. Do not silently
+fall back to direct edits or browser automation.
