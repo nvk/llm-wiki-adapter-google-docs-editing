@@ -2,7 +2,7 @@
 
 A governed Google Docs tracked-suggestions adapter for llm-wiki.
 
-Version 0.11.0 is the complete local-first path: a persistent Desktop OAuth
+Version 0.12.0 is the complete local-first path: a persistent Desktop OAuth
 flow with PKCE and automatic refresh, a Google Workspace add-on that grants
 access to only the active document, and the governed Docs API suggestion
 transport. It creates native Docs suggestions with
@@ -15,7 +15,7 @@ fallback.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public tool code)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.11.0`
+- Version: `0.12.0`
 - Runtime dependencies: Python standard library only
 
 ## What the user does
@@ -39,16 +39,21 @@ projections, dialogs, focus, and an extension/native-messaging bridge. The API
 path replaces those failure points with documented document indexes, revision
 control, atomic batch updates, native suggestion IDs, and read-back.
 
-The preview API is still pre-GA. This branch is a canary, not a claim that the
-transport is ready for public production use.
+Google made the Docs comments and suggestions API generally available on
+September 30, 2026. The API transport no longer requires Developer Preview
+enrollment.
 
 ## One-time setup
 
-- Enrollment in the Google Workspace Developer Preview Program.
 - One standard Google Cloud project with the Docs API enabled, an OAuth consent
   screen, and a **Desktop app** OAuth client.
 - An Apps Script project linked to that same Cloud project for the in-Docs
   per-file grant add-on.
+
+Follow **[Google setup and OAuth](SETUP.md)** from start to finish. It covers
+the Cloud project, API enablement, consent audience and test user, exact
+`drive.file` scope, Desktop-client download, local login, and private add-on
+installation.
 
 First install the API-only adapter. The legacy browser resource is omitted
 unless `--with-browser-fallback` is explicitly supplied:
@@ -57,12 +62,15 @@ unless `--with-browser-fallback` is explicitly supplied:
 ./scripts/install_local.py
 ```
 
-Download the Desktop OAuth client JSON from Google Cloud, then configure and
-connect it. The consent flow opens a loopback browser callback, uses PKCE, asks
-only for `drive.file`, and stores the refresh token in a mode-0600 local file:
+After downloading the Desktop OAuth client JSON, pass its exact quoted path;
+do not use a wildcard before the file exists. The consent flow opens a loopback
+browser callback, uses PKCE, asks only for `drive.file`, and stores the refresh
+token in a mode-0600 local file:
 
 ```bash
-./scripts/google_docs_auth.py configure ~/Downloads/client_secret_*.json
+find "$HOME/Downloads" -maxdepth 1 -type f -name 'client_secret_*.json' -print
+./scripts/google_docs_auth.py configure \
+  "$HOME/Downloads/client_secret_ACTUAL_NAME.apps.googleusercontent.com.json"
 ./scripts/google_docs_auth.py login
 ./scripts/google_docs_auth.py status --json
 ```
@@ -79,9 +87,9 @@ standard Cloud project as the Desktop client. The add-on contains no external
 network calls and never reads document text; it only invokes Google's current
 file-scope grant UI.
 
-Google account consent, Developer Preview enrollment, and an Apps Script test
-deployment are provider-side actions and cannot be preconfigured in this
-repository. Use a disposable synthetic document for the first live canary.
+Google account consent and the Apps Script test deployment are provider-side
+actions and cannot be preconfigured in this repository. Use a disposable
+synthetic document for the first live test.
 
 ## Manual registration
 
@@ -154,7 +162,7 @@ Every API mutation requires and verifies:
 7. fresh read-back of the planned text under those open suggestion IDs.
 
 Exact replacements must have one source match across all tabs and cannot touch
-an existing suggestion. Canary replacements stay within one paragraph. Index
+an existing suggestion. Replacements stay within one paragraph. Index
 calculations use UTF-16 code units. Multiple replacement ranges are applied
 from the end backward. An append is accepted only when the document has one
 tab.
@@ -190,4 +198,4 @@ manifest and source are also checked locally.
 - [Docs API authorization](https://developers.google.com/workspace/docs/api/auth)
 - [OAuth for Desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app)
 - [Editor file-scope actions](https://developers.google.com/workspace/add-ons/editors/gsao/editor-actions)
-- [Google Workspace Developer Preview](https://developers.google.com/workspace/preview)
+- [Docs API release notes](https://developers.google.com/workspace/docs/release-notes)

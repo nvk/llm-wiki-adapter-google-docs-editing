@@ -19,8 +19,8 @@ The Workspace add-on requests only `drive.file` for the active document. It has
 no external fetch allowlist, does not read document text, and performs no
 mutation. The local adapter remains the only mutation path and still requires
 an approved plan hash. Link the add-on and Desktop OAuth client to the same
-standard Cloud project; do not publish the preview feature outside the enrolled
-account or domain.
+standard Cloud project. Keep an unpublished test deployment limited to its
+intended account or Workspace domain.
 
 Every remote write must use native suggest mode, an approved plan hash, the
 planned `requiredRevisionId`, a stable idempotency key, a pre-boundary private

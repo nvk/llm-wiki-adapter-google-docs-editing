@@ -973,7 +973,7 @@ def self_test() -> dict[str, Any]:
         "synthetic-transport-self-test",
         summary={
             "tracked_changes_required": True,
-            "preferred_write_transport": "google-docs-api-suggest-developer-preview",
+            "preferred_write_transport": "google-docs-api-suggest-v1",
             "legacy_write_transport": "shared-browser-executor-suggesting-ui",
             "active_tab_collaboration": True,
             "explicit_multi_tab_workspace": True,
@@ -981,7 +981,7 @@ def self_test() -> dict[str, Any]:
             "bounded_document_scan": True,
             "content_only_revision": True,
             "oauth_used": False,
-            "docs_api_developer_preview_canary": True,
+            "docs_api_native_suggestions_ga": True,
             "docs_api_write_mode": "SUGGEST",
             "desktop_oauth_pkce": True,
             "stored_oauth_refresh": True,

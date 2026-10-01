@@ -27,7 +27,7 @@ EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
 INSPECTION_SCHEMA = "google-docs-api-inspection/v1"
 PLAN_SCHEMA = "google-docs-api-suggestion-plan/v1"
 VERIFICATION_SCHEMA = "google-docs-api-suggestion-verification/v1"
-WRITE_TRANSPORT = "google-docs-api-suggest-developer-preview"
+WRITE_TRANSPORT = "google-docs-api-suggest-v1"
 
 
 class DocsApiClient(Protocol):
@@ -440,7 +440,7 @@ def _compile_requests(
         tabs = _document_tabs(document)
         if len(tabs) != 1:
             raise ValueError(
-                "the API canary only appends to single-tab documents; use an exact replacement"
+                "the API transport only appends to single-tab documents; use an exact replacement"
             )
         tab_id = tabs[0][0]
         end: dict[str, Any] = {}
@@ -562,7 +562,7 @@ def inspect_document(request: dict[str, Any], client: DocsApiClient) -> dict[str
             "tab_count": len(inspection["tabs"]),
             "open_suggestion_count": len(inspection["open_suggestion_ids"]),
             "oauth_used": True,
-            "developer_preview": True,
+            "suggestions_api_ga": True,
         },
         artifacts=[private_artifact(output_path, "google-docs-api-inspection")],
     )
@@ -603,7 +603,7 @@ def plan_suggestions(request: dict[str, Any], client: DocsApiClient) -> dict[str
             "expected_revision_sha256": sha256_bytes(revision_id.encode("utf-8")),
             "tracked_changes": True,
             "oauth_used": True,
-            "developer_preview": True,
+            "suggestions_api_ga": True,
         },
         artifacts=[private_artifact(output_path, "approved-remote-write-plan")],
     )
@@ -832,7 +832,7 @@ def _successful_apply_response(
             "suggestion_count": verification["suggestion_count"],
             "verified": True,
             "oauth_used": True,
-            "developer_preview": True,
+            "suggestions_api_ga": True,
         },
         remote_receipt={
             "status": "verified",
@@ -1073,7 +1073,7 @@ def verify_receipt(request: dict[str, Any], client: DocsApiClient) -> dict[str, 
             "verified": True,
             "suggestion_count": len(suggestion_ids),
             "oauth_used": True,
-            "developer_preview": True,
+            "suggestions_api_ga": True,
         },
         artifacts=[
             private_artifact(output_path, "google-docs-api-suggestion-verification")

@@ -11,17 +11,26 @@ per-file grant and the local `drive.file` token under one application identity.
 
 ## Create a test deployment
 
-1. Create a standalone Apps Script project.
-2. In **Project Settings**, change its Google Cloud project to the same project
-   that contains the Desktop OAuth client and enrolled Docs API preview.
-3. Copy `.clasp.json.example` to `.clasp.json` and set the Apps Script project
-   ID, or copy `Code.gs` and `appsscript.json` in the Apps Script editor.
-4. With Google's `clasp` CLI authenticated, run `clasp push` from this folder.
-5. In Apps Script choose **Deploy > Test deployments > Google Workspace
-   Add-on**, create the deployment, and install it for the enrolled account.
-6. Open a disposable Google Doc, open **LLM Wiki** from the Workspace side
-   panel, and click **Share this document**.
+The full prerequisite and OAuth sequence is in [`../SETUP.md`](../SETUP.md).
+For the add-on itself:
 
-The tracked-suggestion API is still Developer Preview. Keep the deployment
-private to the enrolled account or Workspace domain until Google permits a
-public release.
+1. At <https://script.google.com/home>, create a standalone Apps Script project.
+2. In **Project Settings**, enable **Show `appsscript.json` manifest file in
+   editor**.
+3. Under **Google Cloud Project**, click **Change project** and enter the
+   numeric project number of the same standard Cloud project that contains the
+   Desktop OAuth client. Click **Set project**.
+4. In **Editor**, replace `Code.gs` and `appsscript.json` with the files in this
+   directory, then save.
+5. Choose **Deploy > Test deployments**, click **Install**, then **Done**.
+6. Open or refresh a disposable Google Doc, open **LLM Wiki** from the
+   Workspace side panel, authorize it if prompted, and click **Share this
+   document**.
+
+Alternatively, copy `.clasp.json.example` to `.clasp.json`, set its Apps Script
+project ID, authenticate Google's `clasp` CLI, and run `clasp push` from this
+directory before installing the test deployment.
+
+Google made the tracked-suggestion API generally available on September 30,
+2026. Developer Preview enrollment is not required. An unpublished test
+deployment remains the simplest option for personal use.

@@ -68,7 +68,7 @@ def run_adapter(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run one serialized Google Docs API plan/apply/verify canary"
+        description="Run one serialized Google Docs API plan/apply/verify workflow"
     )
     parser.add_argument("--llm-wiki", required=True)
     parser.add_argument("--url", required=True)

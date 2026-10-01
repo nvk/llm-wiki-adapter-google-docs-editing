@@ -9,13 +9,11 @@ plugin only routes and enforces the approval boundary.
 Use the `api-*` operations, not the browser extension, when all of these are
 true:
 
-1. the Google Cloud project and account are enrolled in the Google Workspace
-   Developer Preview Program;
-2. the Docs API is enabled;
-3. persistent Desktop OAuth is connected through `scripts/google_docs_auth.py`
+1. the Docs API is enabled in the standard Google Cloud project;
+2. persistent Desktop OAuth is connected through `scripts/google_docs_auth.py`
    (or an ephemeral access token is intentionally supplied through
    `LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN`); and
-4. the requested file is within that token's authorized file set.
+3. the requested file is within that token's authorized file set.
 
 The OAuth flow uses a loopback callback, PKCE, offline access, automatic refresh,
 and the narrow `drive.file` scope. The optional Google Workspace add-on in
@@ -39,8 +37,7 @@ variable names (not values):
 ```
 
 `adapter doctor google-docs-editing` is local and does not consume the token or
-call Google. A read-only `api-inspect` is the first live enrollment and access
-check.
+call Google. A read-only `api-inspect` is the first live access check.
 
 ## Fresh-session fast path
 
@@ -51,7 +48,7 @@ check.
    in chat.
 4. Confirm the user clicked **Share this document** in the LLM Wiki Docs add-on
    and authorized the concrete edit.
-5. For the first live preview test, use a disposable synthetic document.
+5. For the first live test, use a disposable synthetic document.
 6. Run the serialized API workflow once and wait for its final JSON.
 
 For one exact replacement, the edit spec is:
@@ -114,12 +111,12 @@ The API path fails closed unless every write has:
 
 Planning reads all document tabs with `SUGGESTIONS_INLINE`, resolves each exact
 source once across all tabs, handles UTF-16 indexes, and rejects a source that
-overlaps an existing suggestion. Canary replacements stay within one paragraph;
-multiple replacements are sent in descending index order. Canary appends are
+overlaps an existing suggestion. Replacements stay within one paragraph;
+multiple replacements are sent in descending index order. Appends are
 limited to single-tab documents so the target cannot be ambiguous.
 
 The adapter writes a mode-0600 pending journal before crossing the HTTP mutation
-boundary. A response timeout, preview partial failure, or failed read-back
+boundary. A response timeout, partial failure, or failed read-back
 blocks duplicate application. `api-recover` performs only a read and can issue
 a receipt only when the original API response supplied exact suggestion IDs.
 If the response was lost before those IDs were journaled, attribution remains
@@ -137,9 +134,9 @@ to inspect private text artifacts.
   is deliberately content-free.
 - Do not use `EDIT`, omit `requiredRevisionId`, retry with a new idempotency key,
   or bypass the approved-plan hash.
-- The native-suggestions API is Developer Preview. Do not treat it as a public
-  production feature until Google makes it generally available and the adapter
-  completes a live canary against an enrolled project.
+- Google made the native-suggestions API generally available on September 30,
+  2026. Keep using a disposable document for the first live test of a new
+  account or deployment.
 - The repository is tool-only. Runtime content and identifiers stay in
   registered external private roots or memory.
 
@@ -147,9 +144,8 @@ to inspect private text artifacts.
 
 The original operations (`inspect`, `plan`, `apply`, `recover`, `verify`) still
 use `browser-collaboration:active-tab` and `llm-wiki-chrome`. They are retained
-only as an explicit fallback while the API canary is being proven. Do not choose
+only as an explicit fallback. Do not choose
 them merely because the Chrome extension happens to be installed.
 
-If preview enrollment or API authorization is unavailable, stop and explain
-that native tracked suggestions cannot yet use the API path. Do not silently
-fall back to direct edits or browser automation.
+If API authorization is unavailable, stop and explain the failed prerequisite.
+Do not silently fall back to direct edits or browser automation.
