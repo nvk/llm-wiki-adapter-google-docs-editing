@@ -973,7 +973,7 @@ def self_test() -> dict[str, Any]:
         "synthetic-transport-self-test",
         summary={
             "tracked_changes_required": True,
-            "preferred_write_transport": "google-docs-api-suggest-apps-script-bridge-v1",
+            "preferred_write_transport": "google-docs-api-suggest-picker-oauth-v1",
             "legacy_write_transport": "shared-browser-executor-suggesting-ui",
             "active_tab_collaboration": True,
             "explicit_multi_tab_workspace": True,
@@ -985,8 +985,7 @@ def self_test() -> dict[str, Any]:
             "docs_api_write_mode": "SUGGEST",
             "desktop_oauth_pkce": True,
             "stored_oauth_refresh": True,
-            "workspace_addon_per_file_grant": True,
-            "apps_script_api_bridge": True,
+            "google_picker_per_file_grant": True,
         },
     )
 

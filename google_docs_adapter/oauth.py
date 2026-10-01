@@ -24,19 +24,15 @@ DOWNLOADED_AUTHORIZATION_ENDPOINTS = {
 }
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
-APPS_SCRIPT_EXTERNAL_REQUEST_SCOPE = (
-    "https://www.googleapis.com/auth/script.external_request"
-)
-OAUTH_SCOPES = (DRIVE_FILE_SCOPE, APPS_SCRIPT_EXTERNAL_REQUEST_SCOPE)
+OAUTH_SCOPES = (DRIVE_FILE_SCOPE,)
 ACCESS_TOKEN_ENV = "LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN"
 OAUTH_DIR_ENV = "LLM_WIKI_GOOGLE_DOCS_OAUTH_DIR"
 CLIENT_SCHEMA = "google-docs-oauth-client/v1"
 TOKEN_SCHEMA = "google-docs-oauth-token/v1"
-BRIDGE_SCHEMA = "google-docs-apps-script-bridge/v1"
 CLIENT_FILENAME = "client.json"
 TOKEN_FILENAME = "token.json"
-BRIDGE_FILENAME = "bridge.json"
 REFRESH_SKEW_SECONDS = 120
+GOOGLE_DOC_MIME_TYPE = "application/vnd.google-apps.document"
 
 
 class OAuthError(RuntimeError):
@@ -60,10 +56,6 @@ def client_path(root: Path | str | None = None) -> Path:
 
 def token_path(root: Path | str | None = None) -> Path:
     return oauth_directory(root) / TOKEN_FILENAME
-
-
-def bridge_path(root: Path | str | None = None) -> Path:
-    return oauth_directory(root) / BRIDGE_FILENAME
 
 
 def _require_private_file(path: Path, label: str) -> None:
@@ -136,37 +128,18 @@ def load_client(root: Path | str | None = None) -> dict[str, Any]:
         or not client_id.endswith(".apps.googleusercontent.com")
         or not isinstance(client_secret, str)
         or not isinstance(scopes, list)
-        or set(scopes) not in ({DRIVE_FILE_SCOPE}, set(OAUTH_SCOPES))
+        or set(scopes) not in (
+            {DRIVE_FILE_SCOPE},
+            {
+                DRIVE_FILE_SCOPE,
+                "https://www.googleapis.com/auth/script.external_request",
+            },
+        )
         or value.get("auth_uri") != AUTHORIZATION_ENDPOINT
         or value.get("token_uri") != TOKEN_ENDPOINT
     ):
         raise OAuthError("Google OAuth client is invalid")
     return value
-
-
-def configure_bridge(
-    deployment_id: str, root: Path | str | None = None
-) -> dict[str, Any]:
-    value = deployment_id.strip()
-    if not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", value):
-        raise OAuthError("Apps Script API executable deployment ID is invalid")
-    write_private_json(
-        bridge_path(root),
-        {"schema": BRIDGE_SCHEMA, "deployment_id": value},
-    )
-    return {"bridge_configured": True}
-
-
-def load_bridge(root: Path | str | None = None) -> dict[str, str]:
-    value = _load_private_json(bridge_path(root), "Apps Script bridge configuration")
-    deployment_id = value.get("deployment_id")
-    if (
-        value.get("schema") != BRIDGE_SCHEMA
-        or not isinstance(deployment_id, str)
-        or not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", deployment_id)
-    ):
-        raise OAuthError("Apps Script bridge configuration is invalid")
-    return {"schema": BRIDGE_SCHEMA, "deployment_id": deployment_id}
 
 
 def _scope_set(raw: Any) -> set[str]:
@@ -190,10 +163,9 @@ def _validated_token(value: dict[str, Any]) -> dict[str, Any]:
         raise OAuthError("Google OAuth token has no refresh token; sign in again")
     if not isinstance(expires_at, (int, float)):
         raise OAuthError("Google OAuth token has no expiry")
-    missing = set(OAUTH_SCOPES) - scopes
-    if missing:
+    if scopes != {DRIVE_FILE_SCOPE}:
         raise OAuthError(
-            "Google OAuth token is missing the Apps Script bridge scopes; sign in again"
+            "Google OAuth token must use only drive.file; select a file again"
         )
     return {
         "schema": TOKEN_SCHEMA,
@@ -265,11 +237,8 @@ def _token_from_response(
         raise OAuthError("Google OAuth response has no refresh token; sign in again")
     if type(expires_in) is not int or expires_in <= 0:
         raise OAuthError("Google OAuth response has an invalid expiry")
-    missing = set(OAUTH_SCOPES) - scopes
-    if missing:
-        raise OAuthError(
-            "Google OAuth consent did not grant every Apps Script bridge scope"
-        )
+    if scopes != {DRIVE_FILE_SCOPE}:
+        raise OAuthError("Google Picker consent did not grant only drive.file")
     return {
         "schema": TOKEN_SCHEMA,
         "access_token": access_token,
@@ -289,7 +258,10 @@ def store_authorization_response(
 
 
 def create_authorization_request(
-    client: dict[str, Any], redirect_uri: str
+    client: dict[str, Any],
+    redirect_uri: str,
+    *,
+    document_id: str | None = None,
 ) -> tuple[str, str, str]:
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)
@@ -298,20 +270,38 @@ def create_authorization_request(
         .rstrip(b"=")
         .decode("ascii")
     )
-    query = urllib.parse.urlencode(
-        {
-            "client_id": client["client_id"],
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(OAUTH_SCOPES),
-            "access_type": "offline",
-            "prompt": "consent",
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
-    )
+    parameters = {
+        "client_id": client["client_id"],
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": DRIVE_FILE_SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",
+        "trigger_onepick": "true",
+        "allow_multiple": "false",
+        "mimetypes": GOOGLE_DOC_MIME_TYPE,
+        "include_granted_scopes": "false",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    if document_id is not None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{10,256}", document_id):
+            raise OAuthError("Google document ID is invalid")
+        parameters["file_ids"] = document_id
+    query = urllib.parse.urlencode(parameters)
     return f"{AUTHORIZATION_ENDPOINT}?{query}", state, verifier
+
+
+def validate_picker_selection(
+    raw_file_ids: str, *, expected_document_id: str | None = None
+) -> list[str]:
+    file_ids = [value.strip() for value in raw_file_ids.split(",") if value.strip()]
+    if len(file_ids) != 1:
+        raise OAuthError("Google Picker must return exactly one selected file")
+    if expected_document_id is not None and file_ids != [expected_document_id]:
+        raise OAuthError("Google Picker returned a different document")
+    return file_ids
 
 
 def exchange_authorization_code(
@@ -383,7 +373,7 @@ def get_access_token(root: Path | str | None = None) -> str:
     if not token_path(root).is_file():
         raise OAuthError(
             "Google Docs OAuth is not connected; run "
-            "scripts/google_docs_auth.py login or set "
+            "scripts/google_docs_auth.py authorize <google-doc-url> or set "
             f"{ACCESS_TOKEN_ENV} for an ephemeral test"
         )
     token = load_token(root)
@@ -399,14 +389,14 @@ def oauth_status(root: Path | str | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "configured": configured,
         "connected": False,
-        "bridge_configured": bridge_path(directory).is_file(),
         "scopes": list(OAUTH_SCOPES),
+        "file_selection": "google-picker",
         "token_source": "stored" if connected else "none",
     }
     if not connected:
         return result
     raw_token = _load_private_json(token_path(directory), "Google OAuth token")
-    if set(OAUTH_SCOPES) - _scope_set(raw_token.get("scope")):
+    if _scope_set(raw_token.get("scope")) != {DRIVE_FILE_SCOPE}:
         result["reauthorization_required"] = True
         return result
     token = _validated_token(raw_token)

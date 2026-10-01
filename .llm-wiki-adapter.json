@@ -1,8 +1,8 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
-  "version": "0.13.0",
-  "description": "Edit explicitly shared Google Docs with OAuth-backed native suggestions through a file-scoped Apps Script bridge.",
+  "version": "0.14.0",
+  "description": "Edit explicitly selected Google Docs with OAuth-backed native suggestions and Google Picker per-file access.",
   "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],
   "capabilities": [
@@ -24,9 +24,8 @@
     "google-docs-api-suggestion-id-verification",
     "google-docs-desktop-oauth-pkce",
     "google-docs-oauth-refresh",
-    "google-docs-workspace-addon-file-grant",
-    "google-docs-apps-script-api-bridge",
-    "google-docs-google-only-token-relay"
+    "google-docs-desktop-picker-file-grant",
+    "google-docs-exact-file-oauth-selection"
   ],
   "routes": [
     {

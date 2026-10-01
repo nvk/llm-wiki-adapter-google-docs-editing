@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import io
 import os
 import subprocess
 import sys
@@ -10,7 +9,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from google_docs_adapter.apps_script_bridge import GoogleDocsAppsScriptClient
 from google_docs_adapter.api_operations import (
     API_RESOURCE,
     PLAN_SCHEMA,
@@ -482,49 +480,6 @@ class ApiOperationsTests(unittest.TestCase):
         self.assertNotIn(token, str(raised.exception))
         self.assertNotIn("sensitive project", str(raised.exception))
 
-    def test_apps_script_bridge_calls_only_fixed_functions(self) -> None:
-        returned = document("rev-bridge")
-        response = io.BytesIO(
-            json.dumps(
-                {"done": True, "response": {"result": returned}}
-            ).encode("utf-8")
-        )
-        client = GoogleDocsAppsScriptClient(
-            "synthetic-token", "synthetic_deployment_id_123456789"
-        )
-        with patch("urllib.request.urlopen", return_value=response) as opened:
-            result = client.get_document(DOCUMENT_ID)
-        self.assertEqual(result, returned)
-        request = opened.call_args.args[0]
-        sent = json.loads(request.data)
-        self.assertEqual(sent["function"], "llmWikiBridgeGetDocument")
-        self.assertEqual(sent["parameters"], [DOCUMENT_ID])
-        self.assertFalse(sent["devMode"])
-        self.assertNotIn("synthetic-token", request.full_url)
-
-    def test_apps_script_bridge_errors_do_not_echo_tokens_or_script_details(self) -> None:
-        token = "synthetic-secret-token"
-        error_body = json.dumps(
-            {
-                "error": {
-                    "code": 403,
-                    "status": "PERMISSION_DENIED",
-                    "message": f"sensitive script detail {token}",
-                }
-            }
-        ).encode()
-        http_error = __import__("urllib.error").error.HTTPError(
-            "https://script.googleapis.com/", 403, "Forbidden", {}, None
-        )
-        http_error.read = lambda: error_body  # type: ignore[method-assign]
-        client = GoogleDocsAppsScriptClient(token, "synthetic_deployment_id_123456789")
-        with patch("urllib.request.urlopen", side_effect=http_error):
-            with self.assertRaises(RuntimeError) as raised:
-                client.get_document(DOCUMENT_ID)
-        self.assertIn("PERMISSION_DENIED", str(raised.exception))
-        self.assertNotIn(token, str(raised.exception))
-        self.assertNotIn("sensitive script", str(raised.exception))
-
     def test_api_request_builders_and_serialized_runner(self) -> None:
         root = Path(__file__).resolve().parents[1]
         plan_output = self.root / "builder-plan"
@@ -568,13 +523,13 @@ class ApiOperationsTests(unittest.TestCase):
             "with log.open('a') as handle: handle.write(operation+'\\n')\n"
             "if operation=='api-plan':\n"
             "  spec=json.loads(Path(value['arguments']['edit_spec']).read_text())\n"
-            "  plan={'schema':'google-docs-api-suggestion-plan/v2',"
-            "'write_transport':'google-docs-api-suggest-apps-script-bridge-v1',"
+            "  plan={'schema':'google-docs-api-suggestion-plan/v3',"
+            "'write_transport':'google-docs-api-suggest-picker-oauth-v1',"
             "'api_resource':'google-docs-api:authorized-files',"
             "'revision_id':'revision-1','edits':spec['edits']}\n"
             "  output=Path(value['output_dir']); output.mkdir(parents=True,exist_ok=True)\n"
             "  (output/'api-plan.json').write_text(json.dumps(plan))\n"
-            "  result={'status':'ok','adapter_version':'0.13.0'}\n"
+            "  result={'status':'ok','adapter_version':'0.14.0'}\n"
             "elif operation=='api-apply':\n"
             "  plan_path=Path(value['arguments']['plan'])\n"
             "  digest=hashlib.sha256(plan_path.read_bytes()).hexdigest()\n"

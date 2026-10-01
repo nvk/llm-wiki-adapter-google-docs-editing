@@ -18,7 +18,6 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from google_docs_adapter.oauth import (  # noqa: E402
     OAuthError,
-    configure_bridge,
     configure_client,
     create_authorization_request,
     disconnect,
@@ -27,6 +26,10 @@ from google_docs_adapter.oauth import (  # noqa: E402
     oauth_directory,
     oauth_status,
     store_authorization_response,
+    validate_picker_selection,
+)
+from google_docs_adapter.browser_executor import (  # noqa: E402
+    document_id_from_expected_url,
 )
 
 
@@ -44,9 +47,15 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
         state = values.get("state", [""])[0]
         code = values.get("code", [""])[0]
         error = values.get("error", [""])[0]
+        picked_file_ids = values.get("picked_file_ids", [""])[0]
         valid = bool(state and state == self.server.expected_state and (code or error))
         if valid:
-            self.server.result = {"state": state, "code": code, "error": error}
+            self.server.result = {
+                "state": state,
+                "code": code,
+                "error": error,
+                "picked_file_ids": picked_file_ids,
+            }
             status = 200
             heading = "Authorization received" if code else "Connection cancelled"
             message = "You can close this window and return to LLM Wiki."
@@ -87,19 +96,25 @@ def _print(value: dict[str, Any], as_json: bool) -> None:
         )
 
 
-def _login(root: Path, *, no_browser: bool, timeout: int) -> dict[str, Any]:
+def _authorize(
+    root: Path,
+    *,
+    no_browser: bool,
+    timeout: int,
+    document_id: str,
+) -> dict[str, Any]:
     client = load_client(root)
     server = OAuthCallbackServer(("127.0.0.1", 0), OAuthCallbackHandler)
     server.result = None
     redirect_uri = f"http://127.0.0.1:{server.server_port}"
     authorization_url, state, verifier = create_authorization_request(
-        client, redirect_uri
+        client, redirect_uri, document_id=document_id
     )
     server.expected_state = state
     if no_browser:
         print(authorization_url)
     elif not webbrowser.open(authorization_url, new=1, autoraise=True):
-        raise OAuthError("could not open a browser; rerun login with --no-browser")
+        raise OAuthError("could not open a browser; rerun authorize with --no-browser")
     deadline = time.monotonic() + timeout
     server.timeout = 0.5
     try:
@@ -109,7 +124,7 @@ def _login(root: Path, *, no_browser: bool, timeout: int) -> dict[str, Any]:
         server.server_close()
     result = server.result
     if result is None:
-        raise OAuthError("Google OAuth login timed out")
+        raise OAuthError("Google Picker authorization timed out")
     if result.get("state") != state:
         raise OAuthError("Google OAuth state did not match")
     if result.get("error"):
@@ -117,12 +132,16 @@ def _login(root: Path, *, no_browser: bool, timeout: int) -> dict[str, Any]:
     code = result.get("code", "")
     if not code:
         raise OAuthError("Google OAuth returned no authorization code")
+    picked_file_ids = validate_picker_selection(
+        result.get("picked_file_ids", ""), expected_document_id=document_id
+    )
     response = exchange_authorization_code(client, code, verifier, redirect_uri)
     store_authorization_response(response, root)
     return {
         "status": "ok",
-        "message": "Google Docs is connected with per-file access.",
+        "message": "Google Doc selected with per-file access.",
         "connected": True,
+        "selected_file_count": len(picked_file_ids),
     }
 
 
@@ -142,18 +161,13 @@ def main() -> int:
     configure.add_argument("client_json")
     configure.add_argument("--json", action="store_true")
 
-    login = subparsers.add_parser(
-        "login", help="Open Google consent and store a refresh token privately"
+    authorize = subparsers.add_parser(
+        "authorize", help="Authorize one exact Google Doc through Google Picker"
     )
-    login.add_argument("--no-browser", action="store_true")
-    login.add_argument("--timeout", type=int, default=300)
-    login.add_argument("--json", action="store_true")
-
-    bridge = subparsers.add_parser(
-        "bridge", help="Store the private Apps Script API executable deployment ID"
-    )
-    bridge.add_argument("deployment_id")
-    bridge.add_argument("--json", action="store_true")
+    authorize.add_argument("document_url")
+    authorize.add_argument("--no-browser", action="store_true")
+    authorize.add_argument("--timeout", type=int, default=300)
+    authorize.add_argument("--json", action="store_true")
 
     status = subparsers.add_parser(
         "status", help="Show content-free authorization status"
@@ -174,17 +188,18 @@ def main() -> int:
                 "message": "Desktop OAuth client configured.",
                 "configured": True,
             }
-        elif args.command == "login":
+        elif args.command == "authorize":
             if not 30 <= args.timeout <= 900:
-                raise OAuthError("login timeout must be between 30 and 900 seconds")
-            result = _login(root, no_browser=args.no_browser, timeout=args.timeout)
-        elif args.command == "bridge":
-            configure_bridge(args.deployment_id, root)
-            result = {
-                "status": "ok",
-                "message": "Apps Script API bridge configured.",
-                "bridge_configured": True,
-            }
+                raise OAuthError(
+                    "authorization timeout must be between 30 and 900 seconds"
+                )
+            document_id = document_id_from_expected_url(args.document_url)
+            result = _authorize(
+                root,
+                no_browser=args.no_browser,
+                timeout=args.timeout,
+                document_id=document_id,
+            )
         elif args.command == "status":
             result = {"status": "ok", **oauth_status(root)}
             if args.json:

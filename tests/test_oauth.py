@@ -85,10 +85,12 @@ class OAuthTests(unittest.TestCase):
         with self.assertRaisesRegex(oauth.OAuthError, "unexpected Google endpoints"):
             oauth.configure_client(self.download, self.root)
 
-    def test_authorization_request_uses_pkce_state_and_bridge_scopes(self) -> None:
+    def test_authorization_request_uses_pkce_and_exact_file_picker(self) -> None:
         client = self.configure()
         url, state, verifier = oauth.create_authorization_request(
-            client, "http://127.0.0.1:54321"
+            client,
+            "http://127.0.0.1:54321",
+            document_id="SYNTHETIC_DOCUMENT_12345",
         )
         parsed = urllib.parse.urlparse(url)
         query = urllib.parse.parse_qs(parsed.query)
@@ -96,10 +98,13 @@ class OAuthTests(unittest.TestCase):
             f"{parsed.scheme}://{parsed.netloc}{parsed.path}",
             oauth.AUTHORIZATION_ENDPOINT,
         )
-        self.assertEqual(
-            set(query["scope"][0].split()),
-            set(oauth.OAUTH_SCOPES),
-        )
+        self.assertEqual(query["scope"], [oauth.DRIVE_FILE_SCOPE])
+        self.assertEqual(query["prompt"], ["consent"])
+        self.assertEqual(query["trigger_onepick"], ["true"])
+        self.assertEqual(query["allow_multiple"], ["false"])
+        self.assertEqual(query["mimetypes"], [oauth.GOOGLE_DOC_MIME_TYPE])
+        self.assertEqual(query["include_granted_scopes"], ["false"])
+        self.assertEqual(query["file_ids"], ["SYNTHETIC_DOCUMENT_12345"])
         self.assertEqual(query["state"], [state])
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertGreaterEqual(len(verifier), 43)
@@ -165,35 +170,39 @@ class OAuthTests(unittest.TestCase):
 
     def test_status_and_disconnect_never_return_token_values(self) -> None:
         self.configure()
-        oauth.configure_bridge("A" * 30, self.root)
         self.token(expires_at=int(time.time()) + 3600)
         status = oauth.oauth_status(self.root)
         self.assertTrue(status["configured"])
         self.assertTrue(status["connected"])
-        self.assertTrue(status["bridge_configured"])
+        self.assertEqual(status["file_selection"], "google-picker")
         self.assertNotIn("access_token", status)
         self.assertNotIn("refresh_token", status)
         self.assertTrue(oauth.disconnect(self.root))
         self.assertFalse(oauth.oauth_status(self.root)["connected"])
 
-    def test_bridge_configuration_is_private_and_validated(self) -> None:
-        result = oauth.configure_bridge("A-valid_deployment-id_123456", self.root)
-        self.assertTrue(result["bridge_configured"])
+    def test_picker_selection_requires_one_exact_file(self) -> None:
+        expected = "SYNTHETIC_DOCUMENT_12345"
         self.assertEqual(
-            oauth.load_bridge(self.root)["deployment_id"],
-            "A-valid_deployment-id_123456",
+            oauth.validate_picker_selection(expected, expected_document_id=expected),
+            [expected],
         )
-        self.assertEqual(
-            stat.S_IMODE(oauth.bridge_path(self.root).stat().st_mode), 0o600
-        )
-        with self.assertRaisesRegex(oauth.OAuthError, "invalid"):
-            oauth.configure_bridge("not valid", self.root)
+        with self.assertRaisesRegex(oauth.OAuthError, "exactly one"):
+            oauth.validate_picker_selection("")
+        with self.assertRaisesRegex(oauth.OAuthError, "exactly one"):
+            oauth.validate_picker_selection(f"{expected},OTHER_DOCUMENT_12345")
+        with self.assertRaisesRegex(oauth.OAuthError, "different document"):
+            oauth.validate_picker_selection(
+                "OTHER_DOCUMENT_12345", expected_document_id=expected
+            )
 
-    def test_legacy_token_requires_bridge_reauthorization(self) -> None:
+    def test_bridge_token_requires_picker_reauthorization(self) -> None:
         value = self.token(expires_at=int(time.time()) + 3600)
-        value["scope"] = [oauth.DRIVE_FILE_SCOPE]
+        value["scope"] = [
+            oauth.DRIVE_FILE_SCOPE,
+            "https://www.googleapis.com/auth/script.external_request",
+        ]
         write_private_json(oauth.token_path(self.root), value)
-        with self.assertRaisesRegex(oauth.OAuthError, "sign in again"):
+        with self.assertRaisesRegex(oauth.OAuthError, "only drive.file"):
             oauth.load_token(self.root)
         status = oauth.oauth_status(self.root)
         self.assertFalse(status["connected"])
