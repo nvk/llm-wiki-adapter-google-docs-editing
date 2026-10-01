@@ -104,7 +104,7 @@ displayed app and Cloud project are yours. A successful status looks like:
   "connected": true,
   "scope": "https://www.googleapis.com/auth/drive.file",
   "status": "ok",
-  "token_source": "stored_oauth"
+  "token_source": "stored"
 }
 ```
 
