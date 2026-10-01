@@ -5,8 +5,9 @@ URLs or IDs, document text, edit specs, plans, receipts, journals, API
 responses, OAuth client secrets, refresh tokens, bearer tokens, or generated
 outputs.
 
-The preferred OAuth path uses a Desktop app loopback callback with PKCE and the
-narrow `drive.file` scope. Client configuration and refresh/access tokens are
+The preferred OAuth path uses a Desktop app loopback callback with PKCE and
+only `drive.file` plus `script.external_request`. Client configuration and
+refresh/access tokens are
 stored outside the repository under
 `~/.config/llm-wiki/google-docs-editing/oauth/` by default. Directories are mode
 0700 and files are mode 0600; broader file permissions are rejected. Token
@@ -15,12 +16,16 @@ receipts, logs, or terminal errors. The optional
 `LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN` environment variable remains an ephemeral
 override and must never be pasted into chat.
 
-The Workspace add-on requests only `drive.file` for the active document. It has
-no external fetch allowlist, does not read document text, and performs no
-mutation. The local adapter remains the only mutation path and still requires
-an approved plan hash. Link the add-on and Desktop OAuth client to the same
-standard Cloud project. Keep an unpublished test deployment limited to its
-intended account or Workspace domain.
+The Workspace add-on requests `drive.file` for the active document and
+`script.external_request` so its API-executable bridge can call only the
+allowlisted `https://docs.googleapis.com/` endpoint. The bridge exposes two
+fixed functions: read one file-scoped document and submit one strictly
+validated native-suggestion batch. It rejects direct-edit mode, missing
+revision locks, non-`ALL_SAVED` comment handling, and every update request type
+except bounded insert/delete. Its short-lived Apps Script OAuth token never
+leaves Google. The local adapter remains the planning and approval authority.
+Link the add-on and Desktop OAuth client to the same standard Cloud project,
+and keep the API executable restricted to the deploying user.
 
 Every remote write must use native suggest mode, an approved plan hash, the
 planned `requiredRevisionId`, a stable idempotency key, a pre-boundary private

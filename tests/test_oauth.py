@@ -49,7 +49,7 @@ class OAuthTests(unittest.TestCase):
             "access_token": access_token,
             "refresh_token": "refresh-secret",
             "expires_at": expires_at,
-            "scope": [oauth.DRIVE_FILE_SCOPE],
+            "scope": list(oauth.OAUTH_SCOPES),
             "token_type": "Bearer",
         }
         write_private_json(oauth.token_path(self.root), value)
@@ -59,7 +59,7 @@ class OAuthTests(unittest.TestCase):
         result = oauth.configure_client(self.download, self.root)
         self.assertTrue(result["configured"])
         stored = oauth.load_client(self.root)
-        self.assertEqual(stored["scopes"], [oauth.DRIVE_FILE_SCOPE])
+        self.assertEqual(stored["scopes"], list(oauth.OAUTH_SCOPES))
         mode = stat.S_IMODE(oauth.client_path(self.root).stat().st_mode)
         self.assertEqual(mode, 0o600)
 
@@ -85,7 +85,7 @@ class OAuthTests(unittest.TestCase):
         with self.assertRaisesRegex(oauth.OAuthError, "unexpected Google endpoints"):
             oauth.configure_client(self.download, self.root)
 
-    def test_authorization_request_uses_pkce_state_and_narrow_scope(self) -> None:
+    def test_authorization_request_uses_pkce_state_and_bridge_scopes(self) -> None:
         client = self.configure()
         url, state, verifier = oauth.create_authorization_request(
             client, "http://127.0.0.1:54321"
@@ -96,7 +96,10 @@ class OAuthTests(unittest.TestCase):
             f"{parsed.scheme}://{parsed.netloc}{parsed.path}",
             oauth.AUTHORIZATION_ENDPOINT,
         )
-        self.assertEqual(query["scope"], [oauth.DRIVE_FILE_SCOPE])
+        self.assertEqual(
+            set(query["scope"][0].split()),
+            set(oauth.OAUTH_SCOPES),
+        )
         self.assertEqual(query["state"], [state])
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertGreaterEqual(len(verifier), 43)
@@ -162,14 +165,39 @@ class OAuthTests(unittest.TestCase):
 
     def test_status_and_disconnect_never_return_token_values(self) -> None:
         self.configure()
+        oauth.configure_bridge("A" * 30, self.root)
         self.token(expires_at=int(time.time()) + 3600)
         status = oauth.oauth_status(self.root)
         self.assertTrue(status["configured"])
         self.assertTrue(status["connected"])
+        self.assertTrue(status["bridge_configured"])
         self.assertNotIn("access_token", status)
         self.assertNotIn("refresh_token", status)
         self.assertTrue(oauth.disconnect(self.root))
         self.assertFalse(oauth.oauth_status(self.root)["connected"])
+
+    def test_bridge_configuration_is_private_and_validated(self) -> None:
+        result = oauth.configure_bridge("A-valid_deployment-id_123456", self.root)
+        self.assertTrue(result["bridge_configured"])
+        self.assertEqual(
+            oauth.load_bridge(self.root)["deployment_id"],
+            "A-valid_deployment-id_123456",
+        )
+        self.assertEqual(
+            stat.S_IMODE(oauth.bridge_path(self.root).stat().st_mode), 0o600
+        )
+        with self.assertRaisesRegex(oauth.OAuthError, "invalid"):
+            oauth.configure_bridge("not valid", self.root)
+
+    def test_legacy_token_requires_bridge_reauthorization(self) -> None:
+        value = self.token(expires_at=int(time.time()) + 3600)
+        value["scope"] = [oauth.DRIVE_FILE_SCOPE]
+        write_private_json(oauth.token_path(self.root), value)
+        with self.assertRaisesRegex(oauth.OAuthError, "sign in again"):
+            oauth.load_token(self.root)
+        status = oauth.oauth_status(self.root)
+        self.assertFalse(status["connected"])
+        self.assertTrue(status["reauthorization_required"])
 
 
 if __name__ == "__main__":

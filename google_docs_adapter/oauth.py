@@ -24,12 +24,18 @@ DOWNLOADED_AUTHORIZATION_ENDPOINTS = {
 }
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+APPS_SCRIPT_EXTERNAL_REQUEST_SCOPE = (
+    "https://www.googleapis.com/auth/script.external_request"
+)
+OAUTH_SCOPES = (DRIVE_FILE_SCOPE, APPS_SCRIPT_EXTERNAL_REQUEST_SCOPE)
 ACCESS_TOKEN_ENV = "LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN"
 OAUTH_DIR_ENV = "LLM_WIKI_GOOGLE_DOCS_OAUTH_DIR"
 CLIENT_SCHEMA = "google-docs-oauth-client/v1"
 TOKEN_SCHEMA = "google-docs-oauth-token/v1"
+BRIDGE_SCHEMA = "google-docs-apps-script-bridge/v1"
 CLIENT_FILENAME = "client.json"
 TOKEN_FILENAME = "token.json"
+BRIDGE_FILENAME = "bridge.json"
 REFRESH_SKEW_SECONDS = 120
 
 
@@ -54,6 +60,10 @@ def client_path(root: Path | str | None = None) -> Path:
 
 def token_path(root: Path | str | None = None) -> Path:
     return oauth_directory(root) / TOKEN_FILENAME
+
+
+def bridge_path(root: Path | str | None = None) -> Path:
+    return oauth_directory(root) / BRIDGE_FILENAME
 
 
 def _require_private_file(path: Path, label: str) -> None:
@@ -107,11 +117,11 @@ def configure_client(
         "client_secret": client_secret,
         "auth_uri": AUTHORIZATION_ENDPOINT,
         "token_uri": TOKEN_ENDPOINT,
-        "scopes": [DRIVE_FILE_SCOPE],
+        "scopes": list(OAUTH_SCOPES),
     }
     destination = client_path(root)
     write_private_json(destination, value)
-    return {"configured": True, "scope": DRIVE_FILE_SCOPE}
+    return {"configured": True, "scopes": list(OAUTH_SCOPES)}
 
 
 def load_client(root: Path | str | None = None) -> dict[str, Any]:
@@ -125,12 +135,38 @@ def load_client(root: Path | str | None = None) -> dict[str, Any]:
         not isinstance(client_id, str)
         or not client_id.endswith(".apps.googleusercontent.com")
         or not isinstance(client_secret, str)
-        or scopes != [DRIVE_FILE_SCOPE]
+        or not isinstance(scopes, list)
+        or set(scopes) not in ({DRIVE_FILE_SCOPE}, set(OAUTH_SCOPES))
         or value.get("auth_uri") != AUTHORIZATION_ENDPOINT
         or value.get("token_uri") != TOKEN_ENDPOINT
     ):
         raise OAuthError("Google OAuth client is invalid")
     return value
+
+
+def configure_bridge(
+    deployment_id: str, root: Path | str | None = None
+) -> dict[str, Any]:
+    value = deployment_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", value):
+        raise OAuthError("Apps Script API executable deployment ID is invalid")
+    write_private_json(
+        bridge_path(root),
+        {"schema": BRIDGE_SCHEMA, "deployment_id": value},
+    )
+    return {"bridge_configured": True}
+
+
+def load_bridge(root: Path | str | None = None) -> dict[str, str]:
+    value = _load_private_json(bridge_path(root), "Apps Script bridge configuration")
+    deployment_id = value.get("deployment_id")
+    if (
+        value.get("schema") != BRIDGE_SCHEMA
+        or not isinstance(deployment_id, str)
+        or not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", deployment_id)
+    ):
+        raise OAuthError("Apps Script bridge configuration is invalid")
+    return {"schema": BRIDGE_SCHEMA, "deployment_id": deployment_id}
 
 
 def _scope_set(raw: Any) -> set[str]:
@@ -154,8 +190,11 @@ def _validated_token(value: dict[str, Any]) -> dict[str, Any]:
         raise OAuthError("Google OAuth token has no refresh token; sign in again")
     if not isinstance(expires_at, (int, float)):
         raise OAuthError("Google OAuth token has no expiry")
-    if DRIVE_FILE_SCOPE not in scopes:
-        raise OAuthError("Google OAuth token was not granted drive.file access")
+    missing = set(OAUTH_SCOPES) - scopes
+    if missing:
+        raise OAuthError(
+            "Google OAuth token is missing the Apps Script bridge scopes; sign in again"
+        )
     return {
         "schema": TOKEN_SCHEMA,
         "access_token": access_token,
@@ -226,8 +265,11 @@ def _token_from_response(
         raise OAuthError("Google OAuth response has no refresh token; sign in again")
     if type(expires_in) is not int or expires_in <= 0:
         raise OAuthError("Google OAuth response has an invalid expiry")
-    if DRIVE_FILE_SCOPE not in scopes:
-        raise OAuthError("Google OAuth consent did not grant drive.file access")
+    missing = set(OAUTH_SCOPES) - scopes
+    if missing:
+        raise OAuthError(
+            "Google OAuth consent did not grant every Apps Script bridge scope"
+        )
     return {
         "schema": TOKEN_SCHEMA,
         "access_token": access_token,
@@ -261,7 +303,7 @@ def create_authorization_request(
             "client_id": client["client_id"],
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": DRIVE_FILE_SCOPE,
+            "scope": " ".join(OAUTH_SCOPES),
             "access_type": "offline",
             "prompt": "consent",
             "state": state,
@@ -357,12 +399,17 @@ def oauth_status(root: Path | str | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "configured": configured,
         "connected": False,
-        "scope": DRIVE_FILE_SCOPE,
+        "bridge_configured": bridge_path(directory).is_file(),
+        "scopes": list(OAUTH_SCOPES),
         "token_source": "stored" if connected else "none",
     }
     if not connected:
         return result
-    token = load_token(directory)
+    raw_token = _load_private_json(token_path(directory), "Google OAuth token")
+    if set(OAUTH_SCOPES) - _scope_set(raw_token.get("scope")):
+        result["reauthorization_required"] = True
+        return result
+    token = _validated_token(raw_token)
     result.update(
         {
             "connected": True,

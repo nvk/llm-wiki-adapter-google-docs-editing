@@ -4,8 +4,15 @@
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
   "oauthScopes": [
-    "https://www.googleapis.com/auth/drive.file"
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/script.external_request"
   ],
+  "urlFetchWhitelist": [
+    "https://docs.googleapis.com/"
+  ],
+  "executionApi": {
+    "access": "MYSELF"
+  },
   "addOns": {
     "common": {
       "name": "LLM Wiki",

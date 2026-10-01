@@ -2,10 +2,11 @@
 
 A governed Google Docs tracked-suggestions adapter for llm-wiki.
 
-Version 0.12.1 is the complete local-first path: a persistent Desktop OAuth
+Version 0.13.0 is the complete local-first path: a persistent Desktop OAuth
 flow with PKCE and automatic refresh, a Google Workspace add-on that grants
-access to only the active document, and the governed Docs API suggestion
-transport. It creates native Docs suggestions with
+access to only the active document, a private Apps Script API-executable
+bridge, and the governed Docs API suggestion transport. It creates native Docs
+suggestions with
 `writeControl.writeMode: SUGGEST`, locks every mutation to the planned
 `requiredRevisionId`, journals an idempotency key before the HTTP boundary, and
 verifies returned suggestion IDs with a fresh API read. The Chrome shared-tab
@@ -15,7 +16,7 @@ fallback.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public tool code)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.12.1`
+- Version: `0.13.0`
 - Runtime dependencies: Python standard library only
 
 ## What the user does
@@ -23,8 +24,8 @@ fallback.
 After one-time Google Cloud and OAuth setup:
 
 1. Open the LLM Wiki side panel in a Google Doc.
-2. Click **Share this document**. The add-on requests only `drive.file` access
-   for that file.
+2. Click **Share this document**. The add-on requests `drive.file` access for
+   that file; other Drive files stay outside its authorized set.
 3. Ask the agent: `wiki edit this Google Doc using suggestions: <URL> ...`.
 4. Approve the concrete plan. The document receives native suggestions that
    can be accepted or rejected normally in Docs.
@@ -45,15 +46,15 @@ enrollment.
 
 ## One-time setup
 
-- One standard Google Cloud project with the Docs API enabled, an OAuth consent
-  screen, and a **Desktop app** OAuth client.
+- One standard Google Cloud project with the Docs API and Apps Script API
+  enabled, an OAuth consent screen, and a **Desktop app** OAuth client.
 - An Apps Script project linked to that same Cloud project for the in-Docs
-  per-file grant add-on.
+  per-file grant add-on and private API executable.
 
 Follow **[Google setup and OAuth](SETUP.md)** from start to finish. It covers
-the Cloud project, API enablement, consent audience and test user, exact
-`drive.file` scope, Desktop-client download, local login, and private add-on
-installation.
+the Cloud project, API enablement, consent audience and test user, exact narrow
+scopes, Desktop-client download, local login, private add-on installation, and
+API-executable deployment.
 
 First install the API-only adapter. The legacy browser resource is omitted
 unless `--with-browser-fallback` is explicitly supplied:
@@ -64,8 +65,9 @@ unless `--with-browser-fallback` is explicitly supplied:
 
 After downloading the Desktop OAuth client JSON, pass its exact quoted path;
 do not use a wildcard before the file exists. The consent flow opens a loopback
-browser callback, uses PKCE, asks only for `drive.file`, and stores the refresh
-token in a mode-0600 local file:
+browser callback, uses PKCE, asks only for the bridge's `drive.file` and
+`script.external_request` scopes, and stores the refresh token in a mode-0600
+local file:
 
 ```bash
 find "$HOME/Downloads" -maxdepth 1 -type f -name 'client_secret_*.json' -print
@@ -75,6 +77,13 @@ find "$HOME/Downloads" -maxdepth 1 -type f -name 'client_secret_*.json' -print
 ./scripts/google_docs_auth.py status --json
 ```
 
+After deploying the same Apps Script project as an API executable, store its
+deployment ID privately:
+
+```bash
+./scripts/google_docs_auth.py bridge 'PASTE_API_EXECUTABLE_DEPLOYMENT_ID'
+```
+
 The default private location is
 `~/.config/llm-wiki/google-docs-editing/oauth/`. Override it with
 `LLM_WIKI_GOOGLE_DOCS_OAUTH_DIR` when needed. An ephemeral token in
@@ -82,10 +91,11 @@ The default private location is
 precedence, but is no longer required.
 
 Deploy the project in [`google_workspace_addon/`](google_workspace_addon/) as
-a private Google Workspace add-on. Its Apps Script project must use the same
-standard Cloud project as the Desktop client. The add-on contains no external
-network calls and never reads document text; it only invokes Google's current
-file-scope grant UI.
+both a private Google Workspace add-on and an API executable restricted to the
+deploying user. Its Apps Script project must use the same standard Cloud
+project as the Desktop client. The local token calls only `scripts.run`; the
+script's own short-lived token calls only the allowlisted Docs API endpoint, so
+the file grant never has to cross OAuth clients.
 
 Google account consent and the Apps Script test deployment are provider-side
 actions and cannot be preconfigured in this repository. Use a disposable

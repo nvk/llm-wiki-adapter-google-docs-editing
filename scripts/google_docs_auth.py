@@ -18,6 +18,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from google_docs_adapter.oauth import (  # noqa: E402
     OAuthError,
+    configure_bridge,
     configure_client,
     create_authorization_request,
     disconnect,
@@ -148,6 +149,12 @@ def main() -> int:
     login.add_argument("--timeout", type=int, default=300)
     login.add_argument("--json", action="store_true")
 
+    bridge = subparsers.add_parser(
+        "bridge", help="Store the private Apps Script API executable deployment ID"
+    )
+    bridge.add_argument("deployment_id")
+    bridge.add_argument("--json", action="store_true")
+
     status = subparsers.add_parser(
         "status", help="Show content-free authorization status"
     )
@@ -171,6 +178,13 @@ def main() -> int:
             if not 30 <= args.timeout <= 900:
                 raise OAuthError("login timeout must be between 30 and 900 seconds")
             result = _login(root, no_browser=args.no_browser, timeout=args.timeout)
+        elif args.command == "bridge":
+            configure_bridge(args.deployment_id, root)
+            result = {
+                "status": "ok",
+                "message": "Apps Script API bridge configured.",
+                "bridge_configured": True,
+            }
         elif args.command == "status":
             result = {"status": "ok", **oauth_status(root)}
             if args.json:

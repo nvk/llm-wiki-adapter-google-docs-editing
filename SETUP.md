@@ -1,10 +1,12 @@
 # Google setup and OAuth
 
-This setup uses one Google Cloud project for two clients:
+This setup uses one Google Cloud project for two execution identities:
 
-- a **Desktop app** OAuth client used by the local adapter; and
-- a private Google Workspace add-on that lets you grant `drive.file` access to
-  one open document at a time.
+- a **Desktop app** OAuth client that calls one private Apps Script executable;
+  and
+- a Google Workspace add-on/API executable that receives `drive.file` access
+  to one open document at a time and relays bounded Docs API calls inside
+  Google.
 
 Use the same Google account throughout. Do not create an API key, service
 account, web client, or Chrome Extension client.
@@ -20,14 +22,16 @@ September 30, 2026. Developer Preview enrollment is no longer required.
 4. Record both its **Project ID** and numeric **Project number**. The Apps
    Script step uses the project number, not the ID.
 
-## 2. Enable the Google Docs API
+## 2. Enable the Google APIs
 
 1. Open <https://console.cloud.google.com/apis/library/docs.googleapis.com>.
-2. Confirm the project selector shows the project from step 1.
-3. Click **Enable**.
+2. Confirm the project selector shows the project from step 1, then click
+   **Enable**.
+3. Open <https://console.cloud.google.com/apis/library/script.googleapis.com>
+   with the same project selected, then click **Enable**.
 
-The add-on code does not use the Drive API. The `drive.file` text below is an
-OAuth scope, not a requirement to enable the Drive API.
+The bridge does not use the Drive API. The `drive.file` text below is an OAuth
+scope, not a requirement to enable the Drive API.
 
 ## 3. Configure Google OAuth consent
 
@@ -44,14 +48,16 @@ OAuth scope, not a requirement to enable the Drive API.
    and create the configuration.
 6. If you chose **External**, open **Audience > Test users**, click **Add
    users**, and add the exact Google account you will use in Docs.
-7. Open **Data Access > Add or Remove Scopes** and add only:
+7. Open **Data Access > Add or Remove Scopes** and add these two scopes:
 
    ```text
    https://www.googleapis.com/auth/drive.file
+   https://www.googleapis.com/auth/script.external_request
    ```
 
-   Save the scope selection. Do not add the broad `drive`, `drive.readonly`, or
-   `documents` scopes.
+   The second scope lets the private API executable call the allowlisted Google
+   Docs endpoint. Save the selection. Do not add the broad `drive`,
+   `drive.readonly`, or `documents` scopes.
 
 `drive.file` is Google's non-sensitive, per-file scope. An External app left in
 **Testing** works for personal setup, but Google expires its authorization and
@@ -102,7 +108,11 @@ displayed app and Cloud project are yours. A successful status looks like:
 {
   "configured": true,
   "connected": true,
-  "scope": "https://www.googleapis.com/auth/drive.file",
+  "bridge_configured": false,
+  "scopes": [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/script.external_request"
+  ],
   "status": "ok",
   "token_source": "stored"
 }
@@ -115,8 +125,9 @@ permissions. Never send those files or their contents to an agent or chat.
 
 ## 6. Install the per-document Google Docs add-on
 
-The add-on is what makes a document eligible for the Desktop client's
-`drive.file` token.
+The add-on owns the per-document grant. The Desktop client's grant cannot use
+that file directly, so the local adapter calls the same Apps Script project as
+an API executable. This avoids broad Drive or Docs access.
 
 1. Open <https://script.google.com/home> and click **New project**.
 2. Name the standalone Apps Script project **LLM Wiki**.
@@ -129,7 +140,9 @@ The add-on is what makes a document eligible for the Desktop client's
 6. Replace the contents of `appsscript.json` with the contents of
    [`google_workspace_addon/appsscript.json`](google_workspace_addon/appsscript.json).
 7. Save the project.
-8. Choose **Deploy > Test deployments**, click **Install**, and then **Done**.
+8. Choose **Deploy > Test deployments**. Select **Google Workspace Add-on** on
+   the left, click **Install**, and then **Done**. If the dialog shows
+   **Uninstall**, it is already installed.
 9. Open or refresh a disposable Google Doc. In the right-side Workspace panel,
    open **LLM Wiki** and authorize the add-on if prompted.
 10. Click **Share this document**. The card should change to **Ready**.
@@ -138,7 +151,32 @@ An unpublished test deployment is appropriate for personal use. Other testers
 need editor access to the Apps Script project and must belong to the same
 domain as its owner.
 
-## 7. Verify before the first edit
+## 7. Deploy and configure the private API bridge
+
+1. In the Apps Script editor, choose **Deploy > New deployment**.
+2. Next to **Select type**, click the gear and choose **API Executable**.
+3. Enter a description such as **LLM Wiki local bridge**.
+4. Set **Who has access** to **Only myself** and click **Deploy**.
+5. Copy the **Deployment ID**. It normally begins with `AKfycb`. Do not use the
+   Script ID from Project Settings.
+6. Back in Terminal, store it privately:
+
+   ```bash
+   ./scripts/google_docs_auth.py bridge 'PASTE_API_EXECUTABLE_DEPLOYMENT_ID'
+   ```
+
+7. Because the bridge adds one OAuth scope, run consent again:
+
+   ```bash
+   ./scripts/google_docs_auth.py login
+   ./scripts/google_docs_auth.py status --json
+   ```
+
+The final status must show `configured`, `connected`, and `bridge_configured`
+as `true`. The deployment ID and OAuth tokens are deliberately omitted from
+status output.
+
+## 8. Verify before the first edit
 
 Run the local checks:
 
@@ -179,10 +217,13 @@ configuration appropriate for your account.
 
 Confirm all of the following:
 
-- the Docs API is enabled in the same Cloud project as the Desktop client;
+- both the Docs API and Apps Script API are enabled in the same Cloud project
+  as the Desktop client;
 - the Apps Script project is linked to that same numeric project number;
 - the same Google account installed the add-on and completed Desktop login; and
-- **Share this document** was clicked in that specific document.
+- **Share this document** was clicked in that specific document;
+- the API executable is deployed with **Only myself** access; and
+- its deployment ID was stored with `google_docs_auth.py bridge`.
 
 ### The add-on does not appear in Docs
 
@@ -195,5 +236,7 @@ refresh the Docs tab. Test deployments are installed per account.
 - [Create a Desktop OAuth client](https://developers.google.com/workspace/guides/create-credentials)
 - [Choose Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
 - [Link Apps Script to a standard Cloud project](https://developers.google.com/apps-script/guides/cloud-platform-projects)
+- [Execute Apps Script functions through `scripts.run`](https://developers.google.com/apps-script/api/how-tos/execute)
+- [Use an Apps Script token with Google APIs](https://developers.google.com/apps-script/reference/script/script-app#getoauthtoken)
 - [Install an unpublished Workspace add-on](https://developers.google.com/workspace/add-ons/how-tos/testing-workspace-addons)
 - [Docs API release notes](https://developers.google.com/workspace/docs/release-notes)

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator, Protocol
 
 from . import __version__
+from .apps_script_bridge import GoogleDocsAppsScriptClient
 from .browser_executor import MAX_BROWSER_EDITS, document_id_from_expected_url
 from .oauth import get_access_token
 from .storage import (
@@ -25,9 +26,9 @@ API_RESOURCE = "google-docs-api:authorized-files"
 API_BASE_URL = "https://docs.googleapis.com/v1"
 EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
 INSPECTION_SCHEMA = "google-docs-api-inspection/v1"
-PLAN_SCHEMA = "google-docs-api-suggestion-plan/v1"
+PLAN_SCHEMA = "google-docs-api-suggestion-plan/v2"
 VERIFICATION_SCHEMA = "google-docs-api-suggestion-verification/v1"
-WRITE_TRANSPORT = "google-docs-api-suggest-v1"
+WRITE_TRANSPORT = "google-docs-api-suggest-apps-script-bridge-v1"
 
 
 class DocsApiClient(Protocol):
@@ -1086,7 +1087,7 @@ def execute_api(
 ) -> dict[str, Any]:
     operation = request.get("operation")
     try:
-        active_client = client or GoogleDocsRestClient.from_environment()
+        active_client = client or GoogleDocsAppsScriptClient.from_environment()
         if operation == "api-inspect":
             return inspect_document(request, active_client)
         if operation == "api-plan":
