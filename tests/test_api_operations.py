@@ -444,8 +444,13 @@ class ApiOperationsTests(unittest.TestCase):
         report = load_json(self.root / "verify" / "api-verification.json", "verify")
         self.assertEqual(report["status"], "verified")
 
-    def test_rest_client_requires_explicit_token(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
+    def test_rest_client_requires_a_configured_token_source(self) -> None:
+        isolated_oauth = self.root / "missing-oauth"
+        with patch.dict(
+            os.environ,
+            {"LLM_WIKI_GOOGLE_DOCS_OAUTH_DIR": str(isolated_oauth)},
+            clear=True,
+        ):
             with self.assertRaisesRegex(
                 RuntimeError, "LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN"
             ):
@@ -524,7 +529,7 @@ class ApiOperationsTests(unittest.TestCase):
             "'revision_id':'revision-1','edits':spec['edits']}\n"
             "  output=Path(value['output_dir']); output.mkdir(parents=True,exist_ok=True)\n"
             "  (output/'api-plan.json').write_text(json.dumps(plan))\n"
-            "  result={'status':'ok','adapter_version':'0.12.0'}\n"
+            "  result={'status':'ok','adapter_version':'0.12.1'}\n"
             "elif operation=='api-apply':\n"
             "  plan_path=Path(value['arguments']['plan'])\n"
             "  digest=hashlib.sha256(plan_path.read_bytes()).hexdigest()\n"

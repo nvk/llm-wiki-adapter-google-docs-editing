@@ -13,12 +13,13 @@
       "layoutProperties": {
         "primaryColor": "#202124",
         "secondaryColor": "#1a73e8"
+      },
+      "homepageTrigger": {
+        "runFunction": "onDocsHomepage",
+        "enabled": true
       }
     },
     "docs": {
-      "homepageTrigger": {
-        "runFunction": "onDocsHomepage"
-      },
       "onFileScopeGrantedTrigger": {
         "runFunction": "onFileScopeGranted"
       }

@@ -22,6 +22,10 @@ class WorkspaceAddonTests(unittest.TestCase):
             manifest["addOns"]["docs"]["onFileScopeGrantedTrigger"]["runFunction"],
             "onFileScopeGranted",
         )
+        self.assertEqual(
+            manifest["addOns"]["common"]["homepageTrigger"],
+            {"runFunction": "onDocsHomepage", "enabled": True},
+        )
         self.assertNotIn("urlFetchWhitelist", manifest)
         self.assertNotIn("openLinkUrlPrefixes", manifest["addOns"]["common"])
 

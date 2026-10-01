@@ -2,7 +2,7 @@
 
 A governed Google Docs tracked-suggestions adapter for llm-wiki.
 
-Version 0.12.0 is the complete local-first path: a persistent Desktop OAuth
+Version 0.12.1 is the complete local-first path: a persistent Desktop OAuth
 flow with PKCE and automatic refresh, a Google Workspace add-on that grants
 access to only the active document, and the governed Docs API suggestion
 transport. It creates native Docs suggestions with
@@ -15,7 +15,7 @@ fallback.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public tool code)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.12.0`
+- Version: `0.12.1`
 - Runtime dependencies: Python standard library only
 
 ## What the user does
