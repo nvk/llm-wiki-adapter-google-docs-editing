@@ -4,7 +4,7 @@ This adapter owns Google-specific planning, native suggestion writes, revision
 locking, idempotency, recovery, and read-back verification. The public llm-wiki
 plugin only routes and enforces the approval boundary.
 
-## Preferred transport: Google Docs API canary
+## Preferred transport: Google Docs API
 
 Use the `api-*` operations, not the browser extension, when all of these are
 true:
@@ -12,14 +12,17 @@ true:
 1. the Google Cloud project and account are enrolled in the Google Workspace
    Developer Preview Program;
 2. the Docs API is enabled;
-3. an already-issued OAuth access token is available only through
-   `LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN`; and
+3. persistent Desktop OAuth is connected through `scripts/google_docs_auth.py`
+   (or an ephemeral access token is intentionally supplied through
+   `LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN`); and
 4. the requested file is within that token's authorized file set.
 
-The canary deliberately does not mint or persist OAuth credentials. Prefer the
-`drive.file` scope and an app-selected or app-created test file. Keep client
-secrets, refresh tokens, access tokens, document IDs, plans, receipts, and API
-responses outside this public repository.
+The OAuth flow uses a loopback callback, PKCE, offline access, automatic refresh,
+and the narrow `drive.file` scope. The optional Google Workspace add-on in
+`google_workspace_addon/` grants that application access to the active document.
+The add-on and Desktop OAuth client must use the same standard Cloud project.
+Keep client secrets, refresh tokens, access tokens, document IDs, plans,
+receipts, and API responses outside this public repository.
 
 Register the adapter with private roots, its API capability, and environment
 variable names (not values):
@@ -31,6 +34,7 @@ variable names (not values):
   --write-root /absolute/private/google-docs-output \
   --remote-resource 'google-docs-api:authorized-files' \
   --env LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN \
+  --env LLM_WIKI_GOOGLE_DOCS_OAUTH_DIR \
   --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR
 ```
 
@@ -42,9 +46,13 @@ check.
 
 1. Route the exact Docs URL and read this guide.
 2. Run `adapter doctor google-docs-editing` and stop on manifest drift.
-3. Confirm the user has authorized this exact document and concrete edit.
-4. For the first live preview test, use a disposable synthetic document.
-5. Run the serialized API workflow once and wait for its final JSON.
+3. Run `scripts/google_docs_auth.py status --json`. If it is not connected,
+   stop and ask the user to complete the local OAuth flow; never request a token
+   in chat.
+4. Confirm the user clicked **Share this document** in the LLM Wiki Docs add-on
+   and authorized the concrete edit.
+5. For the first live preview test, use a disposable synthetic document.
+6. Run the serialized API workflow once and wait for its final JSON.
 
 For one exact replacement, the edit spec is:
 
@@ -125,6 +133,8 @@ to inspect private text artifacts.
 - A URL, OAuth token, API grant, or route match is not write authorization.
 - Never put a bearer token in a request JSON, command line, plan, journal,
   receipt, log, or repository file.
+- Never inspect or report the stored OAuth client or token files. OAuth status
+  is deliberately content-free.
 - Do not use `EDIT`, omit `requiredRevisionId`, retry with a new idempotency key,
   or bypass the approved-plan hash.
 - The native-suggestions API is Developer Preview. Do not treat it as a public

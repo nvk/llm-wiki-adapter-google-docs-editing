@@ -2,18 +2,35 @@
 
 A governed Google Docs tracked-suggestions adapter for llm-wiki.
 
-Version 0.10.0 adds a **Google Docs API Developer Preview canary** as the
-preferred transport. It creates native Docs suggestions with
+Version 0.11.0 is the complete local-first path: a persistent Desktop OAuth
+flow with PKCE and automatic refresh, a Google Workspace add-on that grants
+access to only the active document, and the governed Docs API suggestion
+transport. It creates native Docs suggestions with
 `writeControl.writeMode: SUGGEST`, locks every mutation to the planned
 `requiredRevisionId`, journals an idempotency key before the HTTP boundary, and
 verifies returned suggestion IDs with a fresh API read. The Chrome shared-tab
-transport remains available only as a legacy fallback.
+transport remains in the codebase only as an explicitly installed legacy
+fallback.
 
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public tool code)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.10.0`
+- Version: `0.11.0`
 - Runtime dependencies: Python standard library only
+
+## What the user does
+
+After one-time Google Cloud and OAuth setup:
+
+1. Open the LLM Wiki side panel in a Google Doc.
+2. Click **Share this document**. The add-on requests only `drive.file` access
+   for that file.
+3. Ask the agent: `wiki edit this Google Doc using suggestions: <URL> ...`.
+4. Approve the concrete plan. The document receives native suggestions that
+   can be accepted or rejected normally in Docs.
+
+No Chrome extension, active-tab attachment, accessibility projection, or
+browser focus is involved.
 
 ## Why the API path
 
@@ -25,20 +42,48 @@ control, atomic batch updates, native suggestion IDs, and read-back.
 The preview API is still pre-GA. This branch is a canary, not a claim that the
 transport is ready for public production use.
 
-## Canary prerequisites
+## One-time setup
 
 - Enrollment in the Google Workspace Developer Preview Program.
-- A Google Cloud project with the Docs API enabled.
-- An OAuth token authorized for the test file. Prefer `drive.file` and an
-  app-selected or app-created disposable document.
-- The token supplied at runtime as `LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN`.
+- One standard Google Cloud project with the Docs API enabled, an OAuth consent
+  screen, and a **Desktop app** OAuth client.
+- An Apps Script project linked to that same Cloud project for the in-Docs
+  per-file grant add-on.
 
-The adapter intentionally does not implement an OAuth consent flow or persist a
-refresh token yet. That keeps the first canary small and lets the live API
-contract be proven before building an optional Docs sidebar or Picker flow.
-Never commit or pass bearer tokens on the command line.
+First install the API-only adapter. The legacy browser resource is omitted
+unless `--with-browser-fallback` is explicitly supplied:
 
-## Registration
+```bash
+./scripts/install_local.py
+```
+
+Download the Desktop OAuth client JSON from Google Cloud, then configure and
+connect it. The consent flow opens a loopback browser callback, uses PKCE, asks
+only for `drive.file`, and stores the refresh token in a mode-0600 local file:
+
+```bash
+./scripts/google_docs_auth.py configure ~/Downloads/client_secret_*.json
+./scripts/google_docs_auth.py login
+./scripts/google_docs_auth.py status --json
+```
+
+The default private location is
+`~/.config/llm-wiki/google-docs-editing/oauth/`. Override it with
+`LLM_WIKI_GOOGLE_DOCS_OAUTH_DIR` when needed. An ephemeral token in
+`LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN` remains supported for testing and takes
+precedence, but is no longer required.
+
+Deploy the project in [`google_workspace_addon/`](google_workspace_addon/) as
+a private Google Workspace add-on. Its Apps Script project must use the same
+standard Cloud project as the Desktop client. The add-on contains no external
+network calls and never reads document text; it only invokes Google's current
+file-scope grant UI.
+
+Google account consent, Developer Preview enrollment, and an Apps Script test
+deployment are provider-side actions and cannot be preconfigured in this
+repository. Use a disposable synthetic document for the first live canary.
+
+## Manual registration
 
 Create a local virtual environment (there are no third-party packages):
 
@@ -55,6 +100,7 @@ Register private roots, the API capability, and environment variable names:
   --write-root /absolute/private/google-docs-output \
   --remote-resource 'google-docs-api:authorized-files' \
   --env LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN \
+  --env LLM_WIKI_GOOGLE_DOCS_OAUTH_DIR \
   --env LLM_WIKI_GOOGLE_DOCS_STATE_DIR
 ```
 
@@ -132,8 +178,9 @@ operations are separately named `api-inspect`, `api-plan`, `api-apply`,
 python3 -m unittest discover -s tests -v
 ```
 
-All fixtures are synthetic. Tests use an injected fake API client and never
-need OAuth, network access, or a real document.
+All fixtures are synthetic. Tests use injected fake API and OAuth responses and
+never need credentials, network access, or a real document. The Apps Script
+manifest and source are also checked locally.
 
 ## Primary references
 
@@ -141,4 +188,6 @@ need OAuth, network access, or a real document.
 - [documents.batchUpdate](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/batchUpdate)
 - [Docs API best practices](https://developers.google.com/workspace/docs/api/how-tos/best-practices)
 - [Docs API authorization](https://developers.google.com/workspace/docs/api/auth)
+- [OAuth for Desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app)
+- [Editor file-scope actions](https://developers.google.com/workspace/add-ons/editors/gsao/editor-actions)
 - [Google Workspace Developer Preview](https://developers.google.com/workspace/preview)

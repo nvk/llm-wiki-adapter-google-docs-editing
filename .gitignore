@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 .env
 .env.*
+google_workspace_addon/.clasp.json
 
 # Tool-only repository: runtime material is always external.
 credentials/

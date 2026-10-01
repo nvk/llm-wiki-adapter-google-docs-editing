@@ -524,7 +524,7 @@ class ApiOperationsTests(unittest.TestCase):
             "'revision_id':'revision-1','edits':spec['edits']}\n"
             "  output=Path(value['output_dir']); output.mkdir(parents=True,exist_ok=True)\n"
             "  (output/'api-plan.json').write_text(json.dumps(plan))\n"
-            "  result={'status':'ok','adapter_version':'0.10.0'}\n"
+            "  result={'status':'ok','adapter_version':'0.11.0'}\n"
             "elif operation=='api-apply':\n"
             "  plan_path=Path(value['arguments']['plan'])\n"
             "  digest=hashlib.sha256(plan_path.read_bytes()).hexdigest()\n"

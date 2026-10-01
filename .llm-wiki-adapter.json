@@ -1,8 +1,8 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
-  "version": "0.10.0",
-  "description": "Edit Google Docs with native tracked suggestions through the Docs API, with the shared browser executor retained as a legacy fallback.",
+  "version": "0.11.0",
+  "description": "Edit explicitly shared Google Docs with OAuth-backed native suggestions and an optional in-Docs per-file grant surface.",
   "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],
   "capabilities": [
@@ -21,7 +21,10 @@
     "google-docs-api-developer-preview-canary",
     "google-docs-api-native-suggest-mode",
     "google-docs-api-required-revision-lock",
-    "google-docs-api-suggestion-id-verification"
+    "google-docs-api-suggestion-id-verification",
+    "google-docs-desktop-oauth-pkce",
+    "google-docs-oauth-refresh",
+    "google-docs-workspace-addon-file-grant"
   ],
   "routes": [
     {

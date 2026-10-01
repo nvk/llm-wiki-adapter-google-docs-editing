@@ -983,6 +983,9 @@ def self_test() -> dict[str, Any]:
             "oauth_used": False,
             "docs_api_developer_preview_canary": True,
             "docs_api_write_mode": "SUGGEST",
+            "desktop_oauth_pkce": True,
+            "stored_oauth_refresh": True,
+            "workspace_addon_per_file_grant": True,
         },
     )
 

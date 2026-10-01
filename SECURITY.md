@@ -5,11 +5,22 @@ URLs or IDs, document text, edit specs, plans, receipts, journals, API
 responses, OAuth client secrets, refresh tokens, bearer tokens, or generated
 outputs.
 
-The Docs API canary accepts an already-issued bearer token only through the
-`LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN` environment variable. Register the variable
-name through llm-wiki; do not put its value in adapter registration, request
-JSON, shell arguments, logs, or files. Prefer the narrow `drive.file` scope and
-a disposable app-authorized document for live preview testing.
+The preferred OAuth path uses a Desktop app loopback callback with PKCE and the
+narrow `drive.file` scope. Client configuration and refresh/access tokens are
+stored outside the repository under
+`~/.config/llm-wiki/google-docs-editing/oauth/` by default. Directories are mode
+0700 and files are mode 0600; broader file permissions are rejected. Token
+values never appear in status output, adapter requests, shell arguments, plans,
+receipts, logs, or terminal errors. The optional
+`LLM_WIKI_GOOGLE_DOCS_ACCESS_TOKEN` environment variable remains an ephemeral
+override and must never be pasted into chat.
+
+The Workspace add-on requests only `drive.file` for the active document. It has
+no external fetch allowlist, does not read document text, and performs no
+mutation. The local adapter remains the only mutation path and still requires
+an approved plan hash. Link the add-on and Desktop OAuth client to the same
+standard Cloud project; do not publish the preview feature outside the enrolled
+account or domain.
 
 Every remote write must use native suggest mode, an approved plan hash, the
 planned `requiredRevisionId`, a stable idempotency key, a pre-boundary private
