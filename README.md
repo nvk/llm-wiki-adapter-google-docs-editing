@@ -2,7 +2,7 @@
 
 A governed Google Docs tracked-suggestions adapter for llm-wiki.
 
-Version 0.15.0 uses Google's official Desktop/Mobile Picker OAuth flow for
+Version 0.15.1 uses Google's official Desktop/Mobile Picker OAuth flow for
 per-file access. A user selects one exact Google Doc in the system browser; the
 same Desktop OAuth client then calls the Docs API directly. No Chrome extension,
 Workspace add-on, Apps Script bridge, API key, service account, or broad Drive
@@ -16,20 +16,19 @@ and verifies the returned suggestion IDs with a fresh API read.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public tool code)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.15.0`
+- Version: `0.15.1`
 - Runtime dependencies: Python standard library only
 
 ## User flow
 
 After one-time Google Cloud setup:
 
-1. Authorize the exact document:
-
-   ```bash
-   ./scripts/google_docs_auth.py authorize 'https://docs.google.com/document/d/DOCUMENT_ID/edit'
-   ```
-
-2. In Google Picker, select the displayed document and click **Insert**.
+1. Ask the agent to edit the Google Docs URL. If that exact file still needs a
+   Picker grant, the agent starts the local authorization helper and presents
+   one short link such as `http://127.0.0.1:43210/start`.
+2. Open the short link, then select the displayed document in Google Picker and
+   click **Insert**. You do not need to copy a repository path, document URL, or
+   provider OAuth URL into a terminal.
 3. Ask the agent to edit that Google Docs URL using suggestions.
 4. Review and explicitly approve the concrete edit plan.
 5. Accept or reject the resulting native suggestions normally in Docs.
@@ -60,15 +59,19 @@ Follow **[Google setup and OAuth](SETUP.md)**. The short version is:
    ./scripts/install_local.py
    ```
 
-5. Import the exact downloaded client path and authorize a document:
+5. Import the exact downloaded client path. Agents handle later per-document
+   authorization with a short local link:
 
    ```bash
    find "$HOME/Downloads" -maxdepth 1 -type f -name 'client_secret_*.json' -print
    ./scripts/google_docs_auth.py configure \
      "$HOME/Downloads/client_secret_ACTUAL_NAME.apps.googleusercontent.com.json"
-   ./scripts/google_docs_auth.py authorize "$DOC_URL"
    ./scripts/google_docs_auth.py status --json
    ```
+
+   For manual testing, `./scripts/google_docs_auth.py authorize "$DOC_URL"`
+   opens the browser directly. Add `--no-browser` to print a short loopback
+   start link; the long provider OAuth URL is never printed.
 
 OAuth files are stored outside the repository under
 `~/.config/llm-wiki/google-docs-editing/oauth/` with private permissions. An

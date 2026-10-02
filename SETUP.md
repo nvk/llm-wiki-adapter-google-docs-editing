@@ -81,7 +81,11 @@ from Finder into Terminal, and press Return.
 
 ## 6. Authorize one exact Google Doc
 
-Run:
+During normal use, the agent starts this command itself and gives you one short
+local link. Open that link, select the displayed document, and click **Insert**.
+You should not have to copy the adapter path or Docs URL into Terminal.
+
+For a manual test from the adapter checkout, run:
 
 ```bash
 ./scripts/google_docs_auth.py authorize \
@@ -91,6 +95,11 @@ Run:
 The browser opens Google consent and then Google Picker, filtered to that exact
 Google Doc. Select it and click **Insert**. The local callback verifies that
 Picker returned the requested document before storing the token.
+
+If the browser cannot be opened automatically, use `--no-browser`. It prints a
+short loopback link such as `http://127.0.0.1:43210/start`; opening it redirects
+locally to Google. The long provider OAuth URL is never printed, so it cannot be
+corrupted by terminal wrapping or TUI padding.
 
 Check content-free status:
 
@@ -115,9 +124,10 @@ The token is private under
 `~/.config/llm-wiki/google-docs-editing/oauth/`. Status never prints client
 secrets, access tokens, refresh tokens, or selected document IDs.
 
-Repeat `authorize '<URL>'` when you need to select another file. Because Google
-issues a new Picker authorization token, this command replaces the locally
-stored token used by the adapter.
+When another file needs access, give its normal Docs URL to the agent. The agent
+starts the helper and presents the short local link. Because Google issues a new
+Picker authorization token, completing that flow replaces the locally stored
+token used by the adapter.
 
 ## 7. Install and verify the adapter
 
@@ -130,7 +140,7 @@ python3 -m unittest discover -s tests -v
 Use a disposable synthetic document for the first live test. A normal editing
 session is:
 
-1. authorize the exact document with `google_docs_auth.py authorize`;
+1. give the agent the exact Docs URL and complete its short local Picker link;
 2. ask the agent to plan an edit for that URL;
 3. inspect and explicitly approve the concrete plan; and
 4. let the adapter apply and verify native suggestions.

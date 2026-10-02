@@ -35,6 +35,7 @@ from google_docs_adapter.browser_executor import (  # noqa: E402
 
 class OAuthCallbackServer(HTTPServer):
     expected_state: str
+    authorization_url: str
     result: dict[str, str] | None
 
 
@@ -43,6 +44,14 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/start":
+            self.send_response(302)
+            self.send_header("Location", self.server.authorization_url)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            return
         values = urllib.parse.parse_qs(parsed.query)
         state = values.get("state", [""])[0]
         code = values.get("code", [""])[0]
@@ -111,9 +120,13 @@ def _authorize(
         client, redirect_uri, document_id=document_id
     )
     server.expected_state = state
+    server.authorization_url = authorization_url
+    start_url = f"http://127.0.0.1:{server.server_port}/start"
     if no_browser:
-        print(authorization_url)
-    elif not webbrowser.open(authorization_url, new=1, autoraise=True):
+        # Keep the provider URL out of terminals and chat. The short loopback
+        # URL redirects locally and is safe to present on one unwrapped line.
+        print(start_url, flush=True)
+    elif not webbrowser.open(start_url, new=1, autoraise=True):
         raise OAuthError("could not open a browser; rerun authorize with --no-browser")
     deadline = time.monotonic() + timeout
     server.timeout = 0.5
@@ -165,7 +178,11 @@ def main() -> int:
         "authorize", help="Authorize one exact Google Doc through Google Picker"
     )
     authorize.add_argument("document_url")
-    authorize.add_argument("--no-browser", action="store_true")
+    authorize.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="print one short local start link instead of opening the browser",
+    )
     authorize.add_argument("--timeout", type=int, default=300)
     authorize.add_argument("--json", action="store_true")
 

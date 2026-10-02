@@ -26,11 +26,21 @@ of this public repository.
 1. Route the exact Docs URL and read this guide.
 2. Run `adapter doctor google-docs-editing`; stop on manifest drift.
 3. Run `scripts/google_docs_auth.py status --json` without reading OAuth files.
-4. If disconnected or `reauthorization_required` is true, ask the user to run:
+4. If disconnected, `reauthorization_required` is true, or the first API read
+   returns 403, start the authorization helper yourself in a persistent shell:
 
    ```bash
-   ./scripts/google_docs_auth.py authorize '<exact-doc-url>'
+   "$ADAPTER_ROOT/scripts/google_docs_auth.py" authorize \
+     '<exact-doc-url>' --no-browser
    ```
+
+   The process prints one short loopback URL, such as
+   `http://127.0.0.1:43210/start`, and waits. Keep it running. Present only that
+   short URL to the user as an `Authorize this Google Doc` link on its own line.
+   Do not ask the user to change directories, paste a repository path, paste
+   the Docs URL into a terminal, or copy the long provider OAuth URL. After the
+   user completes Picker, wait for the process to finish and re-run the API
+   read. The short link is local, single-session, and avoids terminal wrapping.
 
 5. Run a read-only `api-inspect` or `api-plan` as the first live access check.
    A 403 means the file must be selected again through Picker.
@@ -114,6 +124,8 @@ private artifacts.
   logs, repository files, or chat.
 - Never inspect or report stored OAuth client/token files. Status is the safe
   interface.
+- Never hand the user a long authorization command. Launch `authorize
+  --no-browser` yourself and expose only its short loopback start link.
 - Never use `EDIT`, omit the required revision, bypass the approved plan hash,
   or retry with a new idempotency key.
 - Runtime content and identifiers stay in registered external private roots or
