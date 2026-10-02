@@ -194,6 +194,11 @@ class ApiOperationsTests(unittest.TestCase):
         self.assertEqual(artifact["document_id"], DOCUMENT_ID)
         self.assertNotIn("comments", artifact)
 
+    def test_legacy_browser_operation_is_not_dispatched(self) -> None:
+        result = execute_api({"operation": "inspect"}, FakeApi([]))
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["errors"], ["unsupported API operation"])
+
     def test_plan_uses_utf16_indexes_and_explicit_tab(self) -> None:
         source = document("rev-emoji", text="A😀 old world\n")
         plan, _plan_path = self.plan(source)

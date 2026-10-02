@@ -20,22 +20,11 @@ class InstallLocalTests(unittest.TestCase):
             Path("/tmp/llm-wiki"),
             Path("/tmp/adapter"),
             Path("/tmp/data"),
-            browser_fallback=False,
         )
         self.assertIn("google-docs-api:authorized-files", command)
         self.assertNotIn("browser-collaboration:active-tab", command)
         self.assertIn("LLM_WIKI_GOOGLE_DOCS_OAUTH_DIR", command)
         self.assertEqual(command.count("--read-root"), 2)
-
-    def test_browser_fallback_must_be_explicit(self) -> None:
-        command = install_local.registration_command(
-            Path("/tmp/llm-wiki"),
-            Path("/tmp/adapter"),
-            Path("/tmp/data"),
-            browser_fallback=True,
-        )
-        self.assertIn("browser-collaboration:active-tab", command)
-
 
 if __name__ == "__main__":
     unittest.main()

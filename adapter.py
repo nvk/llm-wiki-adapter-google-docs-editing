@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from google_docs_adapter.browser_operations import execute
+from google_docs_adapter.api_operations import execute_api as execute
 from google_docs_adapter.storage import load_json, write_private_json
 
 

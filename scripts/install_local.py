@@ -16,9 +16,6 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from google_docs_adapter.api_operations import API_RESOURCE  # noqa: E402
-from google_docs_adapter.browser_operations import (  # noqa: E402
-    COLLABORATION_RESOURCE,
-)
 from google_docs_adapter.oauth import ACCESS_TOKEN_ENV, OAUTH_DIR_ENV  # noqa: E402
 
 STATE_DIR_ENV = "LLM_WIKI_GOOGLE_DOCS_STATE_DIR"
@@ -60,8 +57,6 @@ def registration_command(
     llm_wiki: Path,
     adapter_root: Path,
     data_dir: Path,
-    *,
-    browser_fallback: bool,
 ) -> list[str]:
     input_dir = data_dir / "input"
     output_dir = data_dir / "output"
@@ -87,11 +82,6 @@ def registration_command(
         STATE_DIR_ENV,
         "--json",
     ]
-    if browser_fallback:
-        command[command.index("--json") : command.index("--json")] = [
-            "--remote-resource",
-            COLLABORATION_RESOURCE,
-        ]
     return command
 
 
@@ -125,11 +115,6 @@ def main() -> int:
             Path.home() / ".local" / "share" / "llm-wiki" / "google-docs-editing"
         ),
     )
-    parser.add_argument(
-        "--with-browser-fallback",
-        action="store_true",
-        help="also register the legacy Chrome collaboration resource",
-    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -141,7 +126,6 @@ def main() -> int:
             llm_wiki,
             adapter_root,
             data_dir,
-            browser_fallback=args.with_browser_fallback,
         )
         if args.dry_run:
             print(
@@ -151,7 +135,7 @@ def main() -> int:
                         "dry_run": True,
                         "adapter_root": str(adapter_root),
                         "data_dir": str(data_dir),
-                        "browser_fallback": args.with_browser_fallback,
+                        "browser_transport": False,
                     },
                     sort_keys=True,
                 )
@@ -184,7 +168,7 @@ def main() -> int:
                     "status": "ok",
                     "adapter_id": "google-docs-editing",
                     "data_dir": str(data_dir),
-                    "browser_fallback": args.with_browser_fallback,
+                    "browser_transport": False,
                     "doctor": "ok",
                 },
                 sort_keys=True,

@@ -1,23 +1,11 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
-  "version": "0.14.0",
-  "description": "Edit explicitly selected Google Docs with OAuth-backed native suggestions and Google Picker per-file access.",
+  "version": "0.15.0",
+  "description": "Edit explicitly selected Google Docs through the API with OAuth-backed native suggestions and Google Picker per-file access.",
   "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],
   "capabilities": [
-    "google-docs-browser-inspection",
-    "google-docs-bounded-document-scan",
-    "google-docs-active-tab-collaboration",
-    "google-docs-multi-tab-exact-document-selection",
-    "google-docs-browser-revision-lock",
-    "google-docs-content-revision-lock",
-    "google-docs-suggestion-planning",
-    "google-docs-append-suggestions",
-    "google-docs-shared-browser-executor",
-    "google-docs-shared-executor-runtime-bootstrap",
-    "google-docs-tracked-changes",
-    "google-docs-browser-readback-verification",
     "google-docs-api-native-suggestions",
     "google-docs-api-native-suggest-mode",
     "google-docs-api-required-revision-lock",
@@ -25,7 +13,8 @@
     "google-docs-desktop-oauth-pkce",
     "google-docs-oauth-refresh",
     "google-docs-desktop-picker-file-grant",
-    "google-docs-exact-file-oauth-selection"
+    "google-docs-exact-file-oauth-selection",
+    "google-docs-no-browser-dependency"
   ],
   "routes": [
     {
@@ -50,38 +39,6 @@
     "self-test": {
       "read_arguments": [],
       "requires_output_dir": false
-    },
-    "inspect": {
-      "read_arguments": [],
-      "remote_resource_arguments": ["collaboration_resource"],
-      "requires_output_dir": true,
-      "effects": ["remote-read"]
-    },
-    "plan": {
-      "read_arguments": ["edit_spec"],
-      "remote_resource_arguments": ["collaboration_resource"],
-      "requires_output_dir": true,
-      "effects": ["remote-read"]
-    },
-    "apply": {
-      "read_arguments": ["plan"],
-      "remote_resource_arguments": ["collaboration_resource"],
-      "requires_output_dir": true,
-      "approved_plan_argument": "plan",
-      "effects": ["remote-read", "remote-write"]
-    },
-    "recover": {
-      "read_arguments": ["plan"],
-      "remote_resource_arguments": ["collaboration_resource"],
-      "requires_output_dir": true,
-      "approved_plan_argument": "plan",
-      "effects": ["remote-read", "remote-write"]
-    },
-    "verify": {
-      "read_arguments": ["receipt", "plan"],
-      "remote_resource_arguments": ["collaboration_resource"],
-      "requires_output_dir": true,
-      "effects": ["remote-read"]
     },
     "api-inspect": {
       "read_arguments": [],

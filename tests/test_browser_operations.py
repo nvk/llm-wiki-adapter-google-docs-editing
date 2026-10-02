@@ -133,7 +133,7 @@ class BrowserOperationsTests(unittest.TestCase):
             value["remote_write"] = remote_write
         return value
 
-    def test_manifest_keeps_browser_fallback_and_adds_governed_api_operations(self) -> None:
+    def test_manifest_exposes_only_governed_api_operations(self) -> None:
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))
         project = (root / "pyproject.toml").read_text(encoding="utf-8")
@@ -146,14 +146,19 @@ class BrowserOperationsTests(unittest.TestCase):
                 set(manifest["routes"][0]["intents"])
             )
         )
-        for name in ("inspect", "plan", "apply", "recover", "verify"):
-            self.assertEqual(
-                manifest["operations"][name]["remote_resource_arguments"],
-                ["collaboration_resource"],
+        self.assertNotIn("browser-collaboration:active-tab", json.dumps(manifest))
+        self.assertIn(
+            "google-docs-no-browser-dependency", manifest["capabilities"]
+        )
+        self.assertFalse(
+            any(
+                value.startswith("google-docs-browser-")
+                or value in {
+                    "google-docs-active-tab-collaboration",
+                    "google-docs-shared-browser-executor",
+                }
+                for value in manifest["capabilities"]
             )
-        self.assertEqual(
-            manifest["operations"]["verify"]["read_arguments"],
-            ["receipt", "plan"],
         )
         for name in (
             "api-inspect", "api-plan", "api-apply", "api-recover", "api-verify"

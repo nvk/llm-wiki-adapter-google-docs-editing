@@ -119,10 +119,9 @@ private artifacts.
 - Runtime content and identifiers stay in registered external private roots or
   memory; the repository is tool-only.
 
-## Legacy browser fallback
+## No browser fallback
 
-The original operations (`inspect`, `plan`, `apply`, `recover`, `verify`) use
-`browser-collaboration:active-tab` and `llm-wiki-chrome`. They exist only as an
-explicit fallback and are registered only with `--with-browser-fallback`.
-Never silently switch transports. If API authorization is unavailable, explain
-the prerequisite rather than making a direct edit or using browser automation.
+The registered adapter exposes only `api-*` operations and the
+`google-docs-api:authorized-files` resource. Never ask the user to share a tab
+or install/open the Browser Executor extension. If API authorization is
+unavailable, explain the Picker prerequisite instead of changing transports.

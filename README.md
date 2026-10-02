@@ -2,7 +2,7 @@
 
 A governed Google Docs tracked-suggestions adapter for llm-wiki.
 
-Version 0.14.0 uses Google's official Desktop/Mobile Picker OAuth flow for
+Version 0.15.0 uses Google's official Desktop/Mobile Picker OAuth flow for
 per-file access. A user selects one exact Google Doc in the system browser; the
 same Desktop OAuth client then calls the Docs API directly. No Chrome extension,
 Workspace add-on, Apps Script bridge, API key, service account, or broad Drive
@@ -16,7 +16,7 @@ and verifies the returned suggestion IDs with a fresh API read.
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public tool code)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.14.0`
+- Version: `0.15.0`
 - Runtime dependencies: Python standard library only
 
 ## User flow
@@ -154,14 +154,12 @@ beside the plan by default; `LLM_WIKI_GOOGLE_DOCS_STATE_DIR` can override that
 location. Recovery can prove only exact suggestion IDs already returned by
 Google; otherwise it fails closed for manual resolution.
 
-## Legacy browser operations
+## No browser transport
 
-The earlier `inspect`, `plan`, `apply`, `recover`, and `verify` operations remain
-available only when the adapter is explicitly installed with
-`--with-browser-fallback`. They require `llm-wiki-chrome` 0.1.1 or later. The
-preferred operations are separately named `api-inspect`, `api-plan`,
-`api-apply`, `api-recover`, and `api-verify`, so transport choice is never
-silent.
+The public adapter contract exposes only `api-inspect`, `api-plan`,
+`api-apply`, `api-recover`, and `api-verify`. It does not advertise or accept a
+browser-collaboration resource, so agents cannot silently fall back to the
+Chrome extension when API authorization needs attention.
 
 ## Tests
 

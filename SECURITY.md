@@ -30,22 +30,6 @@ roots. The adapter declares `writes_wiki: false` and never writes wiki content.
 Report suspected vulnerabilities privately rather than opening an issue that
 contains credentials, document identifiers, or content.
 
-## Legacy browser fallback security
-
-The optional browser transport has two gates: a user exposes one exact tab, and
-llm-wiki approves one exact plan hash, expected browser revision, and stable
-idempotency key. A tab share is not authorization for an invented edit.
-
-The adapter compiles a fixed Google Docs typed program for the shared executor.
-It accepts no arbitrary JavaScript, `Runtime.evaluate`, natural-language browser
-job, downloaded code, broad tab enumeration, or persistent host permission.
-Page text and accessibility projections remain private.
-
-Apply rechecks the bounded document projection and source uniqueness, asserts
-Suggesting mode before and after changes, requires a changed post-mutation
-revision, and verifies planned text before issuing a receipt. This proof is
-weaker than first-party Docs suggestion IDs, which is why the Picker-backed API
-transport is preferred.
-
-A compromised local account, browser installation, extension, or signed-in
-Google session is outside the adapter's threat boundary.
+The registered adapter contract has no browser resource or browser operation.
+If API authorization fails, the adapter stops rather than switching to a
+weaker UI-automation path.

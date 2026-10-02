@@ -1075,11 +1075,40 @@ def verify_receipt(request: dict[str, Any], client: DocsApiClient) -> dict[str, 
     )
 
 
+def self_test() -> dict[str, Any]:
+    return _response(
+        "self-test",
+        "ok",
+        "synthetic-api-transport-self-test",
+        summary={
+            "tracked_changes_required": True,
+            "preferred_write_transport": WRITE_TRANSPORT,
+            "browser_transport_available": False,
+            "oauth_used": False,
+            "docs_api_native_suggestions_ga": True,
+            "docs_api_write_mode": "SUGGEST",
+            "desktop_oauth_pkce": True,
+            "stored_oauth_refresh": True,
+            "google_picker_per_file_grant": True,
+        },
+    )
+
+
 def execute_api(
     request: dict[str, Any], client: DocsApiClient | None = None
 ) -> dict[str, Any]:
     operation = request.get("operation")
     try:
+        if operation == "self-test":
+            return self_test()
+        if operation not in {
+            "api-inspect",
+            "api-plan",
+            "api-apply",
+            "api-recover",
+            "api-verify",
+        }:
+            return _error(str(operation), "unsupported API operation")
         active_client = client or GoogleDocsRestClient.from_environment()
         if operation == "api-inspect":
             return inspect_document(request, active_client)
