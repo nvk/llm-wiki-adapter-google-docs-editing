@@ -614,13 +614,7 @@ def _journal_path(idempotency_key: str, plan_path: Path) -> Path:
     root = (
         Path(raw).expanduser().resolve(strict=False)
         if raw
-        else (
-            Path.home()
-            / ".local"
-            / "state"
-            / "llm-wiki"
-            / "google-docs-editing"
-        ).resolve(strict=False)
+        else plan_path.parent / ".google-docs-state"
     )
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:

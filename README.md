@@ -149,9 +149,10 @@ an existing suggestion. Replacements stay within one paragraph. Indexes use
 UTF-16 code units. Multiple ranges are applied from the end backward. Appends
 are accepted only for single-tab documents.
 
-An ambiguous HTTP result is never resent. Recovery can prove only exact
-suggestion IDs already returned by Google; otherwise it fails closed for manual
-resolution.
+An ambiguous HTTP result is never resent. The private idempotency journal stays
+beside the plan by default; `LLM_WIKI_GOOGLE_DOCS_STATE_DIR` can override that
+location. Recovery can prove only exact suggestion IDs already returned by
+Google; otherwise it fails closed for manual resolution.
 
 ## Legacy browser operations
 

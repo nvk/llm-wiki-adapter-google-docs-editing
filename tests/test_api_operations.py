@@ -335,6 +335,19 @@ class ApiOperationsTests(unittest.TestCase):
             receipt["verification"]["created_suggestion_ids"], ["suggestion-1"]
         )
 
+    def test_default_api_journal_stays_with_private_plan(self) -> None:
+        plan, plan_path = self.plan()
+        api = FakeApi(
+            [document("rev-1"), replacement_readback()], self.successful_batch()
+        )
+        with patch.dict(
+            os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": ""}, clear=False
+        ):
+            result = execute_api(self.apply_request(plan, plan_path), api)
+        self.assertEqual(result["status"], "ok", result)
+        journal_dir = plan_path.parent / ".google-docs-state" / "docs-api-journal"
+        self.assertEqual(len(list(journal_dir.glob("*.json"))), 1)
+
     def test_single_tab_append_is_planned_and_verified_as_a_suggestion(self) -> None:
         append_text = " Synthetic append."
         write_private_json(

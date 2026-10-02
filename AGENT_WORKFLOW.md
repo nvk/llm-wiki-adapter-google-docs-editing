@@ -97,10 +97,12 @@ once, uses UTF-16 indexes, and rejects existing-suggestion overlap.
 Replacements stay within one paragraph and execute in descending index order.
 Appends are limited to single-tab documents.
 
-A mode-0600 pending journal is written before crossing the Docs API mutation
-boundary. A timeout, partial failure, or failed read-back blocks duplicate
-application. `api-recover` only reads and can receipt a write only when the
-original response supplied exact suggestion IDs. Otherwise, do not retry.
+A mode-0600 pending journal is written beside the private plan before crossing
+the Docs API mutation boundary (or under `LLM_WIKI_GOOGLE_DOCS_STATE_DIR` when
+explicitly configured). A timeout, partial failure, or failed read-back blocks
+duplicate application. `api-recover` only reads and can receipt a write only
+when the original response supplied exact suggestion IDs. Otherwise, do not
+retry.
 
 Report content-free terminal status unless the user explicitly asks to inspect
 private artifacts.
