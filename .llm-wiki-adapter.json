@@ -1,8 +1,8 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "google-docs-editing",
-  "version": "0.15.1",
-  "description": "Edit explicitly selected Google Docs through the API with OAuth-backed native suggestions and Google Picker per-file access.",
+  "version": "0.16.0",
+  "description": "Edit explicitly selected Google Docs through the API with native suggestions, anchored and assigned comments, person mentions, and Google Picker per-file access.",
   "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],
   "capabilities": [
@@ -10,6 +10,9 @@
     "google-docs-api-native-suggest-mode",
     "google-docs-api-required-revision-lock",
     "google-docs-api-suggestion-id-verification",
+    "google-docs-api-anchored-comments",
+    "google-docs-api-assigned-comments",
+    "google-docs-api-person-mentions",
     "google-docs-desktop-oauth-pkce",
     "google-docs-oauth-refresh",
     "google-docs-desktop-picker-file-grant",
@@ -21,7 +24,7 @@
       "id": "edit-google-document",
       "intents": [
         "edit", "revise", "update", "proofread", "replace", "suggest",
-        "inspect", "read", "review"
+        "inspect", "read", "review", "comment", "mention", "tag", "assign"
       ],
       "resource": {
         "kind": "url",

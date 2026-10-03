@@ -16,7 +16,9 @@ def adapter_root() -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Google Docs tracked-suggestions adapter")
+    parser = argparse.ArgumentParser(
+        description="Google Docs suggestions, comments, and mentions adapter"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("describe")
     execute_parser = subparsers.add_parser("execute")

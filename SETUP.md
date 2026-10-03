@@ -141,9 +141,10 @@ Use a disposable synthetic document for the first live test. A normal editing
 session is:
 
 1. give the agent the exact Docs URL and complete its short local Picker link;
-2. ask the agent to plan an edit for that URL;
+2. ask the agent to plan suggestions, an anchored comment, an assigned comment,
+   or an in-document person mention for that URL;
 3. inspect and explicitly approve the concrete plan; and
-4. let the adapter apply and verify native suggestions.
+4. let the adapter apply and verify native suggestions and/or comment threads.
 
 ## Troubleshooting
 

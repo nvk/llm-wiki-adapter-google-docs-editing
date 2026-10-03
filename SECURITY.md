@@ -22,8 +22,10 @@ override and must never be pasted into chat.
 
 Every remote write requires native suggest mode, an approved plan hash, the
 planned `requiredRevisionId`, a stable idempotency key, a pre-boundary private
-journal, `ALL_SAVED` status, returned suggestion IDs, and API read-back. A
-pending journal after an ambiguous response forbids a duplicate retry.
+journal, `ALL_SAVED` status, returned suggestion or comment IDs for every
+planned effect, and API read-back. Read-back checks open suggestion threads,
+person properties, comment content, assignees, quoted text, and anchor ranges.
+A pending journal after an ambiguous response forbids a duplicate retry.
 
 Runtime inputs and outputs belong in explicitly registered external private
 roots. The adapter declares `writes_wiki: false` and never writes wiki content.

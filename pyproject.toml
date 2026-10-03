@@ -1,8 +1,8 @@
 [project]
 name = "llm-wiki-adapter-google-docs-editing"
-version = "0.15.1"
+version = "0.16.0"
 requires-python = ">=3.9"
-description = "Google Docs tracked-suggestions adapter for llm-wiki"
+description = "Governed Google Docs suggestions, comments, and mentions adapter for llm-wiki"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -25,9 +26,11 @@ API_RESOURCE = "google-docs-api:authorized-files"
 API_BASE_URL = "https://docs.googleapis.com/v1"
 EDIT_SPEC_SCHEMA = "google-docs-edit-spec/v1"
 INSPECTION_SCHEMA = "google-docs-api-inspection/v1"
-PLAN_SCHEMA = "google-docs-api-suggestion-plan/v3"
+PLAN_SCHEMA = "google-docs-api-change-plan/v1"
 VERIFICATION_SCHEMA = "google-docs-api-suggestion-verification/v1"
 WRITE_TRANSPORT = "google-docs-api-suggest-picker-oauth-v1"
+EMAIL_ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MAX_COMMENT_UTF8_BYTES = 2048
 
 
 class DocsApiClient(Protocol):
@@ -291,6 +294,103 @@ def _text_runs(
     return sorted(runs, key=lambda value: (value["tab_id"], value["start_index"]))
 
 
+def _string_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _person_mentions(document: dict[str, Any]) -> list[dict[str, Any]]:
+    mentions: list[dict[str, Any]] = []
+    for tab_id, _title, content in _document_tabs(document):
+        for elements in _walk_structural_content(content):
+            for element in elements:
+                person = element.get("person")
+                start = element.get("startIndex")
+                end = element.get("endIndex")
+                properties = (
+                    person.get("personProperties") if isinstance(person, dict) else None
+                )
+                if (
+                    not isinstance(person, dict)
+                    or not isinstance(properties, dict)
+                    or not isinstance(start, int)
+                    or not isinstance(end, int)
+                    or end < start
+                ):
+                    continue
+                email = properties.get("email")
+                name = properties.get("name", "")
+                person_id = person.get("personId", "")
+                if not isinstance(email, str) or not email:
+                    continue
+                mentions.append(
+                    {
+                        "tab_id": tab_id,
+                        "start_index": start,
+                        "end_index": end,
+                        "email": email,
+                        "name": name if isinstance(name, str) else "",
+                        "person_id": person_id if isinstance(person_id, str) else "",
+                        "suggested_insertion_ids": _string_ids(
+                            person.get("suggestedInsertionIds")
+                        ),
+                        "suggested_deletion_ids": _string_ids(
+                            person.get("suggestedDeletionIds")
+                        ),
+                    }
+                )
+    return sorted(
+        mentions, key=lambda value: (value["tab_id"], value["start_index"])
+    )
+
+
+def _comment_threads(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    comments = document.get("comments")
+    if not isinstance(comments, list):
+        return result
+    for comment in comments:
+        comment_id = comment.get("commentId") if isinstance(comment, dict) else None
+        if isinstance(comment_id, str) and comment_id:
+            result[comment_id] = comment
+    return result
+
+
+def _comment_anchor_ranges(document: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for tab in _flatten_tabs(document.get("tabs")):
+        properties = tab.get("tabProperties")
+        document_tab = tab.get("documentTab")
+        if not isinstance(properties, dict) or not isinstance(document_tab, dict):
+            continue
+        current_tab_id = properties.get("tabId")
+        anchors = document_tab.get("commentAnchors")
+        if not isinstance(current_tab_id, str) or not isinstance(anchors, dict):
+            continue
+        for key, anchor in anchors.items():
+            if not isinstance(anchor, dict):
+                continue
+            anchor_id = anchor.get("anchorId", key)
+            ranges = anchor.get("ranges")
+            if not isinstance(anchor_id, str) or not isinstance(ranges, list):
+                continue
+            normalized: list[dict[str, Any]] = []
+            for value in ranges:
+                if not isinstance(value, dict):
+                    continue
+                item = {
+                    field: item_value
+                    for field, item_value in value.items()
+                    if item_value not in (None, "")
+                }
+                if current_tab_id and "tabId" not in item:
+                    item["tabId"] = current_tab_id
+                normalized.append(item)
+            result[anchor_id] = normalized
+    return result
+
+
 def _utf16_length(value: str) -> int:
     return len(value.encode("utf-16-le")) // 2
 
@@ -335,13 +435,31 @@ def _tab_character_map(
     return "".join(text), starts, ends, suggested
 
 
-def _validate_edit_spec(value: dict[str, Any]) -> list[dict[str, str]]:
+def _valid_email(value: Any, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not EMAIL_ADDRESS.fullmatch(value)
+        or len(value.encode("utf-8")) > MAX_COMMENT_UTF8_BYTES
+    ):
+        raise ValueError(f"{field} must be a valid email address")
+    return value
+
+
+def _bounded_text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be non-empty text")
+    if len(value.encode("utf-8")) > MAX_COMMENT_UTF8_BYTES:
+        raise ValueError(f"{field} exceeds {MAX_COMMENT_UTF8_BYTES} UTF-8 bytes")
+    return value
+
+
+def _validate_edit_spec(value: dict[str, Any]) -> list[dict[str, Any]]:
     if value.get("schema") != EDIT_SPEC_SCHEMA:
         raise ValueError(f"edit spec schema must be {EDIT_SPEC_SCHEMA}")
     edits = value.get("edits")
     if not isinstance(edits, list) or not 1 <= len(edits) <= MAX_BROWSER_EDITS:
         raise ValueError(f"edit spec must contain 1-{MAX_BROWSER_EDITS} edits")
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for edit in edits:
         if not isinstance(edit, dict):
@@ -352,8 +470,68 @@ def _validate_edit_spec(value: dict[str, Any]) -> list[dict[str, str]]:
                 raise ValueError("append edits require non-empty text")
             normalized.append({"append": append})
             continue
+        if set(edit) == {"comment"}:
+            comment = edit.get("comment")
+            if not isinstance(comment, dict):
+                raise ValueError("comment edits require an object")
+            if not {"quote", "content"} <= set(comment) or not set(comment) <= {
+                "quote",
+                "content",
+                "assignee_email",
+            }:
+                raise ValueError(
+                    "comment edits require quote and content, with optional assignee_email"
+                )
+            quote = _bounded_text(comment.get("quote"), "comment quote")
+            if "\x00" in quote:
+                raise ValueError("comment quote cannot contain a null character")
+            content = _bounded_text(comment.get("content"), "comment content")
+            normalized_comment: dict[str, str] = {
+                "quote": quote,
+                "content": content,
+            }
+            if "assignee_email" in comment:
+                normalized_comment["assignee_email"] = _valid_email(
+                    comment.get("assignee_email"), "comment assignee_email"
+                )
+            normalized.append({"comment": normalized_comment})
+            continue
+        if set(edit) == {"person_mention"}:
+            mention = edit.get("person_mention")
+            if not isinstance(mention, dict):
+                raise ValueError("person_mention edits require an object")
+            allowed = {"email", "name", "before", "after"}
+            if not set(mention) <= allowed or "email" not in mention:
+                raise ValueError(
+                    "person_mention requires email, optional name, and one anchor"
+                )
+            anchors = [key for key in ("before", "after") if key in mention]
+            if len(anchors) != 1:
+                raise ValueError(
+                    "person_mention requires exactly one of before or after"
+                )
+            anchor_key = anchors[0]
+            anchor = _bounded_text(
+                mention.get(anchor_key), f"person_mention {anchor_key}"
+            )
+            if "\x00" in anchor:
+                raise ValueError("person_mention anchor cannot contain a null character")
+            normalized_mention: dict[str, str] = {
+                "email": _valid_email(
+                    mention.get("email"), "person_mention email"
+                ),
+                anchor_key: anchor,
+            }
+            if "name" in mention:
+                normalized_mention["name"] = _bounded_text(
+                    mention.get("name"), "person_mention name"
+                )
+            normalized.append({"person_mention": normalized_mention})
+            continue
         if set(edit) != {"find", "replace"}:
-            raise ValueError("API edit entries accept an exact replacement or append")
+            raise ValueError(
+                "API edit entries accept replacement, append, comment, or person_mention"
+            )
         find = edit.get("find")
         replace = edit.get("replace")
         if not isinstance(find, str) or not find:
@@ -364,14 +542,25 @@ def _validate_edit_spec(value: dict[str, Any]) -> list[dict[str, str]]:
             raise ValueError("every edit requires different string replace text")
         if find in seen:
             raise ValueError(
-                "duplicate find text is not allowed in one suggestion plan"
+                "duplicate find text is not allowed in one change plan"
             )
         if any(find in prior or prior in find for prior in seen):
             raise ValueError(
-                "overlapping find text is not allowed in one suggestion plan"
+                "overlapping find text is not allowed in one change plan"
             )
         seen.add(find)
         normalized.append({"find": find, "replace": replace})
+    anchors: list[str] = []
+    for edit in normalized:
+        if "find" in edit:
+            anchors.append(edit["find"])
+        elif "comment" in edit:
+            anchors.append(edit["comment"]["quote"])
+        elif "person_mention" in edit:
+            mention = edit["person_mention"]
+            anchors.append(mention.get("before", mention.get("after")))
+    if len(set(anchors)) != len(anchors):
+        raise ValueError("duplicate source anchors are not allowed in one API plan")
     append_count = sum("append" in edit for edit in normalized)
     if append_count and (append_count != 1 or len(normalized) != 1):
         raise ValueError("append plans must contain exactly one append edit")
@@ -434,8 +623,8 @@ def _range(start: int, end: int, tab_id: str) -> dict[str, Any]:
 
 
 def _compile_requests(
-    document: dict[str, Any], edits: list[dict[str, str]]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    document: dict[str, Any], edits: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     if edits and "append" in edits[0]:
         tabs = _document_tabs(document)
         if len(tabs) != 1:
@@ -454,49 +643,149 @@ def _compile_requests(
                 }
             }
         ]
-        return compiled, [{"kind": "append", "tab_id": tab_id}]
+        return (
+            compiled,
+            [{"kind": "append", "tab_id": tab_id, "action_index": 0}],
+            [{"kind": "suggestion", "action_index": 0}],
+        )
 
-    resolved: list[tuple[dict[str, str], dict[str, Any]]] = []
-    for edit in edits:
-        resolved.append((edit, _find_unique_range(document, edit["find"])))
+    resolved: list[dict[str, Any]] = []
+    for action_index, edit in enumerate(edits):
+        if "find" in edit:
+            source = edit["find"]
+            action_kind = "replace"
+        elif "comment" in edit:
+            source = edit["comment"]["quote"]
+            action_kind = "comment"
+        elif "person_mention" in edit:
+            mention = edit["person_mention"]
+            source = mention.get("before", mention.get("after"))
+            action_kind = "person_mention"
+        else:
+            raise ValueError("unsupported canonical API edit action")
+        target = _find_unique_range(document, source)
+        resolved.append(
+            {
+                "action_index": action_index,
+                "kind": action_kind,
+                "edit": edit,
+                "target": target,
+            }
+        )
     occupied: set[tuple[str, int]] = set()
-    for _edit, target in resolved:
+    for item in resolved:
+        target = item["target"]
         for index in range(target["start_index"], target["end_index"]):
             marker = (target["tab_id"], index)
             if marker in occupied:
-                raise ValueError("resolved API edit ranges overlap")
+                raise ValueError("resolved API action anchors overlap")
             occupied.add(marker)
     resolved.sort(
-        key=lambda value: (value[1]["tab_id"], value[1]["start_index"]),
+        key=lambda value: (
+            value["target"]["tab_id"],
+            value["target"]["start_index"],
+        ),
         reverse=True,
     )
     requests: list[dict[str, Any]] = []
     targets: list[dict[str, Any]] = []
-    for edit, target in resolved:
+    request_effects: list[dict[str, Any]] = []
+    for item in resolved:
+        edit = item["edit"]
+        target = item["target"]
+        action_index = item["action_index"]
+        action_kind = item["kind"]
         tab_id = target["tab_id"]
         start = target["start_index"]
         end = target["end_index"]
-        requests.append({"deleteContentRange": {"range": _range(start, end, tab_id)}})
-        if edit["replace"]:
+        if action_kind == "replace":
             requests.append(
-                {
-                    "insertText": {
-                        "text": edit["replace"],
-                        "location": _location(start, tab_id),
+                {"deleteContentRange": {"range": _range(start, end, tab_id)}}
+            )
+            request_effects.append(
+                {"kind": "suggestion", "action_index": action_index}
+            )
+            if edit["replace"]:
+                requests.append(
+                    {
+                        "insertText": {
+                            "text": edit["replace"],
+                            "location": _location(start, tab_id),
+                        }
                     }
+                )
+                request_effects.append(
+                    {"kind": "suggestion", "action_index": action_index}
+                )
+            targets.append(
+                {
+                    "kind": "replace",
+                    "action_index": action_index,
+                    "tab_id": tab_id,
+                    "start_index": start,
+                    "end_index": end,
+                    "find": edit["find"],
+                    "replace": edit["replace"],
                 }
             )
-        targets.append(
-            {
-                "kind": "replace",
+            continue
+        if action_kind == "comment":
+            comment = edit["comment"]
+            body: dict[str, Any] = {
+                "content": comment["content"],
+                "range": _range(start, end, tab_id),
+            }
+            if "assignee_email" in comment:
+                body["assigneeEmailAddress"] = comment["assignee_email"]
+            requests.append({"insertComment": body})
+            request_effects.append(
+                {"kind": "comment", "action_index": action_index}
+            )
+            target_value = {
+                "kind": "comment",
+                "action_index": action_index,
                 "tab_id": tab_id,
                 "start_index": start,
                 "end_index": end,
-                "find": edit["find"],
-                "replace": edit["replace"],
+                "quote": comment["quote"],
+                "content": comment["content"],
             }
-        )
-    return requests, targets
+            if "assignee_email" in comment:
+                target_value["assignee_email"] = comment["assignee_email"]
+            targets.append(target_value)
+            continue
+        if action_kind == "person_mention":
+            mention = edit["person_mention"]
+            index = start if "before" in mention else end
+            properties = {"email": mention["email"]}
+            if "name" in mention:
+                properties["name"] = mention["name"]
+            requests.append(
+                {
+                    "insertPerson": {
+                        "personProperties": properties,
+                        "location": _location(index, tab_id),
+                    }
+                }
+            )
+            request_effects.append(
+                {"kind": "suggestion", "action_index": action_index}
+            )
+            target_value = {
+                "kind": "person_mention",
+                "action_index": action_index,
+                "tab_id": tab_id,
+                "index": index,
+                "email": mention["email"],
+                "anchor": mention.get("before", mention.get("after")),
+                "anchor_side": "before" if "before" in mention else "after",
+            }
+            if "name" in mention:
+                target_value["name"] = mention["name"]
+            targets.append(target_value)
+            continue
+        raise ValueError("unsupported canonical API edit action")
+    return requests, targets, request_effects
 
 
 def _suggestion_ids(document: dict[str, Any]) -> set[str]:
@@ -513,6 +802,9 @@ def _suggestion_ids(document: dict[str, Any]) -> set[str]:
         result.update(run["suggested_insertion_ids"])
         result.update(run["suggested_deletion_ids"])
         result.update(run["suggested_style_ids"])
+    for mention in _person_mentions(document):
+        result.update(mention["suggested_insertion_ids"])
+        result.update(mention["suggested_deletion_ids"])
     return result
 
 
@@ -532,6 +824,12 @@ def _inspection(document: dict[str, Any], expected_url: str) -> dict[str, Any]:
         "title": document.get("title", ""),
         "tabs": tabs,
         "open_suggestion_ids": sorted(_suggestion_ids(document)),
+        "open_comment_ids": sorted(
+            comment_id
+            for comment_id, comment in _comment_threads(document).items()
+            if comment.get("status") == "OPEN"
+        ),
+        "person_mention_count": len(_person_mentions(document)),
     }
 
 
@@ -561,6 +859,8 @@ def inspect_document(request: dict[str, Any], client: DocsApiClient) -> dict[str
             "revision_sha256": sha256_bytes(revision_id.encode("utf-8")),
             "tab_count": len(inspection["tabs"]),
             "open_suggestion_count": len(inspection["open_suggestion_ids"]),
+            "open_comment_count": len(inspection["open_comment_ids"]),
+            "person_mention_count": inspection["person_mention_count"],
             "oauth_used": True,
             "suggestions_api_ga": True,
         },
@@ -575,7 +875,7 @@ def plan_suggestions(request: dict[str, Any], client: DocsApiClient) -> dict[str
     edits = _validate_edit_spec(edit_spec)
     document = client.get_document(document_id)
     revision_id = _validate_document(document, document_id)
-    requests, targets = _compile_requests(document, edits)
+    requests, targets, request_effects = _compile_requests(document, edits)
     plan = {
         "schema": PLAN_SCHEMA,
         "write_transport": WRITE_TRANSPORT,
@@ -587,6 +887,7 @@ def plan_suggestions(request: dict[str, Any], client: DocsApiClient) -> dict[str
         "edits": edits,
         "targets": targets,
         "requests": requests,
+        "request_effects": request_effects,
         "preexisting_suggestion_ids": sorted(_suggestion_ids(document)),
     }
     output_path = Path(request["output_dir"]).resolve(strict=False) / "api-plan.json"
@@ -599,9 +900,11 @@ def plan_suggestions(request: dict[str, Any], client: DocsApiClient) -> dict[str
         summary={
             "edit_count": len(edits),
             "api_request_count": len(requests),
+            "comment_count": sum("comment" in edit for edit in edits),
+            "person_mention_count": sum("person_mention" in edit for edit in edits),
             "plan_sha256": plan_sha256,
             "expected_revision_sha256": sha256_bytes(revision_id.encode("utf-8")),
-            "tracked_changes": True,
+            "tracked_changes": any("comment" not in edit for edit in edits),
             "oauth_used": True,
             "suggestions_api_ga": True,
         },
@@ -630,7 +933,7 @@ def _validate_plan_request(
 ) -> tuple[dict[str, Any], Path, str, str, str, str]:
     resource = _api_resource(request)
     plan_path = Path(request["arguments"]["plan"]).resolve(strict=True)
-    plan = load_json(plan_path, "API suggestion plan")
+    plan = load_json(plan_path, "API change plan")
     if plan.get("schema") != PLAN_SCHEMA:
         raise ValueError(f"plan schema must be {PLAN_SCHEMA}")
     if plan.get("write_transport") != WRITE_TRANSPORT:
@@ -647,10 +950,22 @@ def _validate_plan_request(
         raise ValueError("API plan edits are not canonical")
     requests = plan.get("requests")
     targets = plan.get("targets")
+    request_effects = plan.get("request_effects")
     if not isinstance(requests, list) or not requests:
         raise ValueError("API plan has no batch requests")
     if not isinstance(targets, list) or not targets:
         raise ValueError("API plan has no resolved targets")
+    if (
+        not isinstance(request_effects, list)
+        or len(request_effects) != len(requests)
+        or any(
+            not isinstance(effect, dict)
+            or effect.get("kind") not in {"suggestion", "comment"}
+            or not isinstance(effect.get("action_index"), int)
+            for effect in request_effects
+        )
+    ):
+        raise ValueError("API plan has invalid request effects")
     remote_write = request.get("remote_write")
     if not isinstance(remote_write, dict):
         raise ValueError("API apply requires remote_write governance")
@@ -670,17 +985,28 @@ def _validate_plan_request(
     return plan, plan_path, plan_sha256, expected_revision, idempotency_key, document_id
 
 
-def _affected_suggestion_ids(
-    response: dict[str, Any], expected_count: int
-) -> tuple[set[str], set[str]]:
+def _batch_effects(
+    response: dict[str, Any], request_effects: list[dict[str, Any]]
+) -> tuple[set[str], set[str], list[dict[str, Any]]]:
     values = response.get("suggestionResponses")
-    if not isinstance(values, list) or len(values) != expected_count:
+    if not isinstance(values, list) or len(values) != len(request_effects):
         raise RuntimeError(
             "Google Docs API suggestionResponses do not match the approved requests"
         )
     created: set[str] = set()
     affected: set[str] = set()
-    for value in values:
+    comment_requests = any(
+        effect.get("kind") == "comment" for effect in request_effects
+    )
+    replies = response.get("replies")
+    if comment_requests and (
+        not isinstance(replies, list) or len(replies) != len(request_effects)
+    ):
+        raise RuntimeError(
+            "Google Docs API replies do not match the approved comment requests"
+        )
+    created_comments: list[dict[str, Any]] = []
+    for index, (value, effect) in enumerate(zip(values, request_effects)):
         if not isinstance(value, dict):
             raise RuntimeError("Google Docs API returned an invalid suggestionResponse")
         per_request: set[str] = set()
@@ -701,11 +1027,25 @@ def _affected_suggestion_ids(
             affected.update(valid)
             if key == "createdSuggestionIds":
                 created.update(valid)
-        if not per_request:
+        if effect.get("kind") == "suggestion" and not per_request:
             raise RuntimeError("a Google Docs API update did not affect a suggestion")
-    if not created:
+        if effect.get("kind") != "comment":
+            continue
+        reply = replies[index] if isinstance(replies, list) else None
+        insert = reply.get("insertComment") if isinstance(reply, dict) else None
+        thread = insert.get("commentThread") if isinstance(insert, dict) else None
+        comment_id = thread.get("commentId") if isinstance(thread, dict) else None
+        if not isinstance(comment_id, str) or not comment_id:
+            raise RuntimeError("Google Docs API returned no created comment identifier")
+        created_comments.append(
+            {
+                "action_index": effect["action_index"],
+                "comment_id": comment_id,
+            }
+        )
+    if any(effect.get("kind") == "suggestion" for effect in request_effects) and not created:
         raise RuntimeError("Google Docs API did not report a created suggestion")
-    return created, affected
+    return created, affected, created_comments
 
 
 def _suggested_text(
@@ -738,37 +1078,117 @@ def _thread_statuses(document: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def _verify_person_mention(
+    target: dict[str, Any],
+    document: dict[str, Any],
+    suggestion_ids: set[str],
+) -> None:
+    for mention in _person_mentions(document):
+        inserted = set(mention["suggested_insertion_ids"])
+        if not inserted.intersection(suggestion_ids):
+            continue
+        if (
+            mention["tab_id"] == target["tab_id"]
+            and mention["start_index"] == target["index"]
+            and mention["email"].casefold() == target["email"].casefold()
+            and (
+                "name" not in target
+                or mention["name"] == target["name"]
+            )
+        ):
+            return
+    raise RuntimeError("API read-back did not observe the suggested person mention")
+
+
+def _verify_comment(
+    target: dict[str, Any],
+    document: dict[str, Any],
+    comment_id: str,
+) -> None:
+    comment = _comment_threads(document).get(comment_id)
+    if not isinstance(comment, dict):
+        raise RuntimeError("API read-back did not expose a created comment")
+    if comment.get("status") != "OPEN":
+        raise RuntimeError("a created comment is no longer open during read-back")
+    post = comment.get("headPost")
+    if not isinstance(post, dict) or post.get("content") != target["content"]:
+        raise RuntimeError("API read-back did not preserve created comment content")
+    assignee = target.get("assignee_email")
+    observed_assignee = post.get("assigneeEmail")
+    if assignee is not None and (
+        not isinstance(observed_assignee, str)
+        or observed_assignee.casefold() != assignee.casefold()
+    ):
+        raise RuntimeError("API read-back did not preserve the comment assignee")
+    if assignee is None and observed_assignee not in (None, ""):
+        raise RuntimeError("API read-back unexpectedly assigned the comment")
+    if comment.get("plainTextQuote") != target["quote"]:
+        raise RuntimeError("API read-back did not preserve the comment quote")
+    anchor_id = comment.get("anchorId")
+    if not isinstance(anchor_id, str) or not anchor_id:
+        raise RuntimeError("API read-back returned an unanchored comment")
+    expected = _range(
+        target["start_index"], target["end_index"], target["tab_id"]
+    )
+    anchors = _comment_anchor_ranges(document)
+    if expected not in anchors.get(anchor_id, []):
+        raise RuntimeError("API read-back did not preserve the comment anchor range")
+
+
 def _verify_document(
     plan: dict[str, Any],
     document: dict[str, Any],
     suggestion_ids: set[str],
+    created_comments: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    if not suggestion_ids:
+    suggestion_actions = [
+        edit for edit in plan.get("edits", []) if "comment" not in edit
+    ]
+    if suggestion_actions and not suggestion_ids:
         raise RuntimeError(
             "no new suggestion identifiers are available for verification"
         )
-    present = _suggestion_ids(document)
-    missing = sorted(suggestion_ids - present)
-    if missing:
-        raise RuntimeError("API read-back did not expose every created suggestion")
-    statuses = _thread_statuses(document)
-    missing_threads = sorted(suggestion_ids - set(statuses))
-    if missing_threads:
-        raise RuntimeError("API read-back did not expose every suggestion thread")
-    not_open = sorted(
-        value for value in suggestion_ids if statuses.get(value) != "OPEN"
-    )
-    if not_open:
-        raise RuntimeError("a created suggestion is no longer open during read-back")
+    if suggestion_ids:
+        present = _suggestion_ids(document)
+        missing = sorted(suggestion_ids - present)
+        if missing:
+            raise RuntimeError("API read-back did not expose every created suggestion")
+        statuses = _thread_statuses(document)
+        missing_threads = sorted(suggestion_ids - set(statuses))
+        if missing_threads:
+            raise RuntimeError("API read-back did not expose every suggestion thread")
+        not_open = sorted(
+            value for value in suggestion_ids if statuses.get(value) != "OPEN"
+        )
+        if not_open:
+            raise RuntimeError("a created suggestion is no longer open during read-back")
     inserted, deleted = _suggested_text(document, suggestion_ids)
     inserted_values = list(inserted.values())
     deleted_values = list(deleted.values())
-    for edit in plan.get("edits", []):
+    targets_by_action = {
+        target["action_index"]: target for target in plan.get("targets", [])
+    }
+    comments_by_action = {
+        value["action_index"]: value["comment_id"] for value in created_comments
+    }
+    for action_index, edit in enumerate(plan.get("edits", [])):
+        target = targets_by_action.get(action_index)
+        if not isinstance(target, dict):
+            raise RuntimeError("API verification has no resolved action target")
         if "append" in edit:
             if not any(edit["append"] in value for value in inserted_values):
                 raise RuntimeError(
                     "API read-back did not observe the suggested append text"
                 )
+            continue
+        if "person_mention" in edit:
+            _verify_person_mention(target, document, suggestion_ids)
+            continue
+        if "comment" in edit:
+            comment_id = comments_by_action.get(action_index)
+            if not isinstance(comment_id, str):
+                raise RuntimeError("no created comment identifier is available")
+            _verify_comment(target, document, comment_id)
             continue
         if edit.get("replace") and not any(
             edit["replace"] in value for value in inserted_values
@@ -787,9 +1207,17 @@ def _verify_document(
         "required_revision_enforced": True,
         "comment_update_state": "ALL_SAVED",
         "created_suggestion_ids": sorted(suggestion_ids),
+        "created_comments": sorted(
+            created_comments, key=lambda value: value["action_index"]
+        ),
         "suggestion_count": len(suggestion_ids),
+        "comment_count": len(created_comments),
+        "person_mention_count": sum(
+            "person_mention" in edit for edit in plan.get("edits", [])
+        ),
         "planned_text_observed_after_mutation": True,
-        "suggestion_threads_open_after_mutation": True,
+        "suggestion_threads_open_after_mutation": bool(suggestion_ids),
+        "comment_threads_open_after_mutation": bool(created_comments),
     }
 
 
@@ -822,8 +1250,11 @@ def _successful_apply_response(
         "ok",
         run_id,
         summary={
-            "tracked_changes": True,
+            "tracked_changes": verification["suggestion_count"] > 0,
+            "write_mode": "SUGGEST",
             "suggestion_count": verification["suggestion_count"],
+            "comment_count": verification["comment_count"],
+            "person_mention_count": verification["person_mention_count"],
             "verified": True,
             "oauth_used": True,
             "suggestions_api_ga": True,
@@ -873,8 +1304,14 @@ def apply_suggestions(request: dict[str, Any], client: DocsApiClient) -> dict[st
         raise RuntimeError(
             "the Google document changed after planning; no edit was sent"
         )
-    live_requests, live_targets = _compile_requests(before, list(plan.get("edits", [])))
-    if live_requests != plan.get("requests") or live_targets != plan.get("targets"):
+    live_requests, live_targets, live_effects = _compile_requests(
+        before, list(plan.get("edits", []))
+    )
+    if (
+        live_requests != plan.get("requests")
+        or live_targets != plan.get("targets")
+        or live_effects != plan.get("request_effects")
+    ):
         raise RuntimeError(
             "the live API edit projection no longer matches the approved plan"
         )
@@ -907,11 +1344,14 @@ def apply_suggestions(request: dict[str, Any], client: DocsApiClient) -> dict[st
             "Google Docs API did not report ALL_SAVED; the write is ambiguous and "
             "must be recovered without retrying"
         )
-    created, affected = _affected_suggestion_ids(batch, len(plan["requests"]))
+    created, affected, created_comments = _batch_effects(
+        batch, plan["request_effects"]
+    )
     pending.update(
         {
             "created_suggestion_ids": sorted(created),
             "affected_suggestion_ids": sorted(affected),
+            "created_comments": created_comments,
         }
     )
     write_private_json(journal_path, pending)
@@ -920,7 +1360,7 @@ def apply_suggestions(request: dict[str, Any], client: DocsApiClient) -> dict[st
     after_revision = _after_revision(batch, after)
     if after_revision == expected_revision:
         raise RuntimeError("Google Docs API read-back did not observe a new revision")
-    verification = _verify_document(plan, after, created)
+    verification = _verify_document(plan, after, created, created_comments)
     response = _successful_apply_response(
         operation="api-apply",
         plan_sha256=plan_sha256,
@@ -974,25 +1414,41 @@ def recover_suggestions(
         for value in stored.get("created_suggestion_ids", [])
         if isinstance(value, str) and value
     }
+    created_comments = [
+        value
+        for value in stored.get("created_comments", [])
+        if isinstance(value, dict)
+        and isinstance(value.get("action_index"), int)
+        and isinstance(value.get("comment_id"), str)
+        and value["comment_id"]
+    ]
     batch_response = stored.get("batch_response")
     if (
-        not created
+        (not created or not created_comments)
         and isinstance(batch_response, dict)
         and batch_response.get("commentUpdateState") == "ALL_SAVED"
     ):
-        created, _affected = _affected_suggestion_ids(
-            batch_response, len(plan["requests"])
+        created, _affected, created_comments = _batch_effects(
+            batch_response, plan["request_effects"]
         )
-    if not created:
+    expects_suggestions = any(
+        effect.get("kind") == "suggestion" for effect in plan["request_effects"]
+    )
+    expects_comments = any(
+        effect.get("kind") == "comment" for effect in plan["request_effects"]
+    )
+    if (expects_suggestions and not created) or (
+        expects_comments and not created_comments
+    ):
         raise RuntimeError(
-            "the pending Docs API write has no returned suggestion IDs; attribution "
+            "the pending Docs API write has no complete returned effect IDs; attribution "
             "is ambiguous, so it cannot be retried or automatically receipted"
         )
     document = client.get_document(document_id)
     live_revision = _validate_document(document, document_id)
     if live_revision == expected_revision:
         raise RuntimeError("Docs API recovery did not observe a new document revision")
-    verification = _verify_document(plan, document, created)
+    verification = _verify_document(plan, document, created, created_comments)
     response = _successful_apply_response(
         operation="api-recover",
         plan_sha256=plan_sha256,
@@ -1016,12 +1472,12 @@ def verify_receipt(request: dict[str, Any], client: DocsApiClient) -> dict[str, 
     _api_resource(request)
     plan_path = Path(request["arguments"]["plan"]).resolve(strict=True)
     receipt_path = Path(request["arguments"]["receipt"]).resolve(strict=True)
-    plan = load_json(plan_path, "API suggestion plan")
+    plan = load_json(plan_path, "API change plan")
     if (
         plan.get("schema") != PLAN_SCHEMA
         or plan.get("write_transport") != WRITE_TRANSPORT
     ):
-        raise ValueError("verification plan is not a Docs API suggestion plan")
+        raise ValueError("verification plan is not a Docs API change plan")
     receipt_document = load_json(receipt_path, "Docs API remote receipt")
     remote_receipt = receipt_document.get("remote_receipt")
     if not isinstance(remote_receipt, dict):
@@ -1043,9 +1499,24 @@ def verify_receipt(request: dict[str, Any], client: DocsApiClient) -> dict[str, 
     if not isinstance(ids, list):
         raise ValueError("receipt has no created suggestion identifiers")
     suggestion_ids = {value for value in ids if isinstance(value, str) and value}
+    created_comments = previous.get("created_comments")
+    if not isinstance(created_comments, list):
+        raise ValueError("receipt has no created comment identifiers")
+    normalized_comments = [
+        value
+        for value in created_comments
+        if isinstance(value, dict)
+        and isinstance(value.get("action_index"), int)
+        and isinstance(value.get("comment_id"), str)
+        and value["comment_id"]
+    ]
+    if len(normalized_comments) != len(created_comments):
+        raise ValueError("receipt has invalid created comment identifiers")
     document = client.get_document(document_id)
     revision_id = _validate_document(document, document_id)
-    verification = _verify_document(plan, document, suggestion_ids)
+    verification = _verify_document(
+        plan, document, suggestion_ids, normalized_comments
+    )
     report = {
         "schema": VERIFICATION_SCHEMA,
         "status": "verified",
@@ -1053,6 +1524,7 @@ def verify_receipt(request: dict[str, Any], client: DocsApiClient) -> dict[str, 
         "receipt_sha256": sha256_file(receipt_path),
         "revision_id": revision_id,
         "created_suggestion_ids": sorted(suggestion_ids),
+        "created_comments": normalized_comments,
         "verification": verification,
     }
     output_path = (
@@ -1066,6 +1538,8 @@ def verify_receipt(request: dict[str, Any], client: DocsApiClient) -> dict[str, 
         summary={
             "verified": True,
             "suggestion_count": len(suggestion_ids),
+            "comment_count": len(normalized_comments),
+            "person_mention_count": verification["person_mention_count"],
             "oauth_used": True,
             "suggestions_api_ga": True,
         },
@@ -1081,11 +1555,15 @@ def self_test() -> dict[str, Any]:
         "ok",
         "synthetic-api-transport-self-test",
         summary={
-            "tracked_changes_required": True,
+            "suggest_mode_required": True,
+            "tracked_changes_supported": True,
             "preferred_write_transport": WRITE_TRANSPORT,
             "browser_transport_available": False,
             "oauth_used": False,
             "docs_api_native_suggestions_ga": True,
+            "docs_api_comments_ga": True,
+            "docs_api_assigned_comments": True,
+            "docs_api_person_mentions": True,
             "docs_api_write_mode": "SUGGEST",
             "desktop_oauth_pkce": True,
             "stored_oauth_refresh": True,

@@ -1,8 +1,9 @@
 # Google Docs editing agent workflow
 
-This adapter owns Google-specific planning, native suggestion writes, revision
-locking, idempotency, recovery, and read-back verification. llm-wiki routes the
-request and enforces the approval boundary.
+This adapter owns Google-specific planning, native suggestion writes, anchored
+comments, assigned comments, person mentions, revision locking, idempotency,
+recovery, and read-back verification. llm-wiki routes the request and enforces
+the approval boundary.
 
 ## Preferred transport: Google Docs API
 
@@ -68,11 +69,54 @@ For a single-tab document, one append is also supported:
 }
 ```
 
+To comment on an exact quote and tag a collaborator, use a native assigned
+comment:
+
+```json
+{
+  "schema": "google-docs-edit-spec/v1",
+  "edits": [
+    {
+      "comment": {
+        "quote": "Synthetic phrase to review.",
+        "content": "Please review this wording.",
+        "assignee_email": "reviewer@example.com"
+      }
+    }
+  ]
+}
+```
+
+`assignee_email` is optional. Use it when the request is to tag or notify a
+person; plain `@name` text is not a verified tag. The adapter verifies the
+native assignment, but the Docs API does not expose notification delivery for
+read-back.
+
+To insert an in-document person mention as a suggestion:
+
+```json
+{
+  "schema": "google-docs-edit-spec/v1",
+  "edits": [
+    {
+      "person_mention": {
+        "email": "reviewer@example.com",
+        "name": "Reviewer",
+        "after": "Owner: "
+      }
+    }
+  ]
+}
+```
+
+A person mention requires an email and exactly one exact, unique `before` or
+`after` anchor. `name` is optional.
+
 Create the edit spec in a registered private input root. Choose a new empty run
 directory under a registered private output root. After explicit approval:
 
 ```bash
-"$ADAPTER_ROOT/scripts/run_api_suggestion_workflow.py" \
+"$ADAPTER_ROOT/scripts/run_api_change_workflow.py" \
   --llm-wiki "$LLM_WIKI" --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
   --run-dir "$RUN_DIR" --idempotency-key "$IDEMPOTENCY_KEY" \
   --approve-remote-write
@@ -99,13 +143,16 @@ The API path fails closed unless every write has:
 - the planned Docs `revisionId` as `requiredRevisionId`;
 - `writeControl.writeMode: SUGGEST`;
 - `commentUpdateState: ALL_SAVED`;
-- created suggestion IDs returned by Google; and
-- fresh API read-back proving the planned text belongs to those open IDs.
+- created suggestion or comment IDs returned by Google for every planned
+  effect; and
+- fresh API read-back proving text suggestions, person mentions, comment
+  content, assignments, quoted text, and anchors match the approved plan.
 
-Planning reads all tabs with `SUGGESTIONS_INLINE`, resolves each exact source
-once, uses UTF-16 indexes, and rejects existing-suggestion overlap.
-Replacements stay within one paragraph and execute in descending index order.
-Appends are limited to single-tab documents.
+Planning reads all tabs with `SUGGESTIONS_INLINE` and comments included,
+resolves each exact source once, uses UTF-16 indexes, and rejects
+existing-suggestion overlap. Replacements, comment quotes, and person-mention
+anchors stay within one paragraph, cannot overlap each other, and execute in
+descending index order. Appends are limited to single-tab documents.
 
 A mode-0600 pending journal is written beside the private plan before crossing
 the Docs API mutation boundary (or under `LLM_WIKI_GOOGLE_DOCS_STATE_DIR` when
@@ -127,7 +174,9 @@ private artifacts.
 - Never hand the user a long authorization command. Launch `authorize
   --no-browser` yourself and expose only its short loopback start link.
 - Never use `EDIT`, omit the required revision, bypass the approved plan hash,
-  or retry with a new idempotency key.
+  or retry with a new idempotency key. Comments are also created inside the
+  governed `SUGGEST` batch, even though a comment thread is not itself a text
+  suggestion.
 - Runtime content and identifiers stay in registered external private roots or
   memory; the repository is tool-only.
 

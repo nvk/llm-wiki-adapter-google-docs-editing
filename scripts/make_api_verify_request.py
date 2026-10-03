@@ -23,7 +23,7 @@ def main() -> int:
     parser.add_argument("--request", required=True)
     args = parser.parse_args()
     plan_path = Path(args.plan).expanduser().resolve(strict=True)
-    plan = load_json(plan_path, "API suggestion plan")
+    plan = load_json(plan_path, "API change plan")
     if plan.get("schema") != PLAN_SCHEMA:
         raise SystemExit(f"not a {PLAN_SCHEMA} plan")
     receipt_path = Path(args.receipt).expanduser().resolve(strict=True)
@@ -32,7 +32,7 @@ def main() -> int:
     if not isinstance(remote_receipt, dict):
         raise SystemExit("receipt has no remote_receipt")
     if remote_receipt.get("plan_sha256") != sha256_file(plan_path):
-        raise SystemExit("receipt does not match the API suggestion plan")
+        raise SystemExit("receipt does not match the API change plan")
     value = {
         "protocol": "llm-wiki-adapter/v1",
         "adapter_id": "google-docs-editing",

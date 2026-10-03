@@ -16,7 +16,7 @@ from google_docs_adapter.storage import load_json, write_private_json  # noqa: E
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build a Docs API suggestion-plan request"
+        description="Build a Docs API suggestion/comment/mention plan request"
     )
     parser.add_argument("--url", required=True)
     parser.add_argument("--edit-spec", required=True)

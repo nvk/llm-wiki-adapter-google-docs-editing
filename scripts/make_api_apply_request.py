@@ -27,7 +27,7 @@ def main() -> int:
     parser.add_argument("--request", required=True)
     args = parser.parse_args()
     plan_path = Path(args.plan).expanduser().resolve(strict=True)
-    plan = load_json(plan_path, "API suggestion plan")
+    plan = load_json(plan_path, "API change plan")
     if plan.get("schema") != PLAN_SCHEMA:
         raise SystemExit(f"not a {PLAN_SCHEMA} plan")
     if plan.get("write_transport") != WRITE_TRANSPORT:

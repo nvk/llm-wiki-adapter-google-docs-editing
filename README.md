@@ -1,22 +1,28 @@
 # Google Docs Editing Adapter
 
-A governed Google Docs tracked-suggestions adapter for llm-wiki.
+A governed Google Docs suggestions, comments, and @mentions adapter for
+llm-wiki.
 
-Version 0.15.1 uses Google's official Desktop/Mobile Picker OAuth flow for
-per-file access. A user selects one exact Google Doc in the system browser; the
-same Desktop OAuth client then calls the Docs API directly. No Chrome extension,
-Workspace add-on, Apps Script bridge, API key, service account, or broad Drive
-scope is required.
+Version 0.16.0 adds native anchored comments, assigned comments,
+and in-document person mentions to the existing suggestions transport. It uses
+Google's official Desktop/Mobile Picker OAuth flow for per-file access. A user
+selects one exact Google Doc in the system browser; the same Desktop OAuth
+client then calls the Docs API directly. No Chrome extension, Workspace add-on,
+Apps Script bridge, API key, service account, or broad Drive scope is required.
 
-Every mutation creates native Docs suggestions with
-`writeControl.writeMode: SUGGEST`, locks the request to the planned
-`requiredRevisionId`, journals a stable idempotency key before the HTTP boundary,
-and verifies the returned suggestion IDs with a fresh API read.
+Every remote write is sent through `documents.batchUpdate` with
+`writeControl.writeMode: SUGGEST`, locked to the planned `requiredRevisionId`,
+and journaled under a stable idempotency key before the HTTP boundary. Text and
+person-mention changes remain native suggestions. Comments remain native Docs
+comment threads; an `assignee_email` invokes Docs' native assignment and
+notification behavior for that collaborator. Fresh API read-back verifies
+suggestion IDs, comment IDs, assignments, and anchors; notification delivery
+itself is not observable through the read API.
 
 - Repository: `nvk/llm-wiki-adapter-google-docs-editing` (public tool code)
 - Manifest ID: `google-docs-editing`
 - Protocol: `llm-wiki-adapter/v1`
-- Version: `0.15.1`
+- Version: `0.16.0`
 - Runtime dependencies: Python standard library only
 
 ## User flow
@@ -29,9 +35,10 @@ After one-time Google Cloud setup:
 2. Open the short link, then select the displayed document in Google Picker and
    click **Insert**. You do not need to copy a repository path, document URL, or
    provider OAuth URL into a terminal.
-3. Ask the agent to edit that Google Docs URL using suggestions.
-4. Review and explicitly approve the concrete edit plan.
-5. Accept or reject the resulting native suggestions normally in Docs.
+3. Ask the agent to suggest edits, add comments, assign a comment, or insert a
+   person mention in that Google Docs URL.
+4. Review and explicitly approve the concrete change plan.
+5. Accept or reject suggestions and handle assigned comments normally in Docs.
 
 A document URL or Picker selection is not write approval.
 
@@ -101,7 +108,7 @@ Register private roots and the API capability:
 
 Run `adapter doctor google-docs-editing` after any manifest change.
 
-## Serialized suggestion workflow
+## Serialized suggestion, comment, and mention workflow
 
 Save a private edit spec:
 
@@ -114,10 +121,49 @@ Save a private edit spec:
 }
 ```
 
+Add an anchored comment and tag a collaborator by assigning it:
+
+```json
+{
+  "schema": "google-docs-edit-spec/v1",
+  "edits": [
+    {
+      "comment": {
+        "quote": "Synthetic phrase to review.",
+        "content": "Please review this wording.",
+        "assignee_email": "reviewer@example.com"
+      }
+    }
+  ]
+}
+```
+
+Insert a native person mention after one exact, unique anchor:
+
+```json
+{
+  "schema": "google-docs-edit-spec/v1",
+  "edits": [
+    {
+      "person_mention": {
+        "email": "reviewer@example.com",
+        "name": "Reviewer",
+        "after": "Owner: "
+      }
+    }
+  ]
+}
+```
+
+Use exactly one of `before` or `after` for a person mention. Comments require an
+exact `quote`; `assignee_email` is optional. Plain comment text that merely
+contains `@name` is not treated as a verified tag—use `assignee_email` when a
+notification is required.
+
 After the user approves that concrete change, run:
 
 ```bash
-"$ADAPTER_ROOT/scripts/run_api_suggestion_workflow.py" \
+"$ADAPTER_ROOT/scripts/run_api_change_workflow.py" \
   --llm-wiki "$LLM_WIKI" --url "$DOC_URL" --edit-spec "$EDIT_SPEC" \
   --run-dir "$RUN_DIR" --idempotency-key "$IDEMPOTENCY_KEY" \
   --approve-remote-write
@@ -144,13 +190,16 @@ Every API mutation requires and verifies:
 3. `writeMode: SUGGEST`;
 4. a stable idempotency key and pre-boundary private journal;
 5. `commentUpdateState: ALL_SAVED`;
-6. API-returned created suggestion IDs; and
-7. fresh read-back under those open suggestion IDs.
+6. API-returned suggestion or comment IDs for every planned effect; and
+7. fresh read-back of open suggestion threads, person properties, comment
+   content, assignment, quoted text, and anchor ranges.
 
 Exact replacements must have one source match across all tabs and cannot touch
 an existing suggestion. Replacements stay within one paragraph. Indexes use
 UTF-16 code units. Multiple ranges are applied from the end backward. Appends
-are accepted only for single-tab documents.
+are accepted only for single-tab documents. Comment quotes and mention anchors
+must also resolve exactly once and cannot overlap another action anchor in the
+same plan.
 
 An ambiguous HTTP result is never resent. The private idempotency journal stays
 beside the plan by default; `LLM_WIKI_GOOGLE_DOCS_STATE_DIR` can override that
@@ -177,7 +226,8 @@ not need credentials, network access, or a real document.
 
 - [Desktop and mobile Google Picker](https://developers.google.com/workspace/drive/picker/guides/desktop-mobile-picker)
 - [Drive `drive.file` scope](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
-- [Google Docs API suggestions](https://developers.google.com/workspace/docs/api/how-tos/suggestions)
+- [Google Docs API comments and suggestions](https://developers.google.com/workspace/docs/api/how-tos/suggestions)
+- [`InsertCommentRequest` and `InsertPersonRequest`](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/request)
 - [`documents.batchUpdate`](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/batchUpdate)
 - [OAuth for Desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app)
 - [Docs API release notes](https://developers.google.com/workspace/docs/release-notes)

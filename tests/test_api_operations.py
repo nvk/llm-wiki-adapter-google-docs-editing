@@ -45,6 +45,26 @@ def text_element(
     }
 
 
+def person_element(
+    email: str,
+    name: str,
+    start: int,
+    *,
+    inserted: list[str] | None = None,
+) -> dict:
+    person = {
+        "personId": "synthetic-person-id",
+        "personProperties": {"email": email, "name": name},
+    }
+    if inserted:
+        person["suggestedInsertionIds"] = inserted
+    return {
+        "startIndex": start,
+        "endIndex": start + 1,
+        "person": person,
+    }
+
+
 def document(
     revision: str,
     *,
@@ -52,6 +72,8 @@ def document(
     text: str = "Hello old world\n",
     tab_id: str = "tab-1",
     suggestions: list[dict] | None = None,
+    comments: list[dict] | None = None,
+    comment_anchors: dict | None = None,
     extra_tabs: list[dict] | None = None,
 ) -> dict:
     if elements is None:
@@ -64,6 +86,8 @@ def document(
             },
         }
     ]
+    if comment_anchors is not None:
+        tabs[0]["documentTab"]["commentAnchors"] = comment_anchors
     if extra_tabs:
         tabs.extend(extra_tabs)
     value = {
@@ -75,6 +99,8 @@ def document(
     }
     if suggestions is not None:
         value["suggestions"] = suggestions
+    if comments is not None:
+        value["comments"] = comments
     return value
 
 
@@ -398,6 +424,194 @@ class ApiOperationsTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok", result)
         self.assertEqual(result["summary"]["suggestion_count"], 1)
 
+    def test_assigned_comment_is_planned_applied_and_verified(self) -> None:
+        write_private_json(
+            self.edit_spec,
+            {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [
+                    {
+                        "comment": {
+                            "quote": "old",
+                            "content": "Please review this wording.",
+                            "assignee_email": "cara@example.com",
+                        }
+                    }
+                ],
+            },
+        )
+        plan, plan_path = self.plan()
+        self.assertEqual(
+            plan["requests"],
+            [
+                {
+                    "insertComment": {
+                        "content": "Please review this wording.",
+                        "assigneeEmailAddress": "cara@example.com",
+                        "range": {
+                            "startIndex": 7,
+                            "endIndex": 10,
+                            "tabId": "tab-1",
+                        },
+                    }
+                }
+            ],
+        )
+        self.assertEqual(
+            plan["request_effects"], [{"kind": "comment", "action_index": 0}]
+        )
+        after = document(
+            "rev-2",
+            comments=[
+                {
+                    "commentId": "comment-1",
+                    "anchorId": "anchor-1",
+                    "status": "OPEN",
+                    "plainTextQuote": "old",
+                    "headPost": {
+                        "postId": "post-1",
+                        "content": "Please review this wording.",
+                        "assigneeEmail": "cara@example.com",
+                    },
+                }
+            ],
+            comment_anchors={
+                "anchor-1": {
+                    "anchorId": "anchor-1",
+                    "ranges": [
+                        {"startIndex": 7, "endIndex": 10, "tabId": "tab-1"}
+                    ],
+                }
+            },
+        )
+        batch = {
+            "documentId": DOCUMENT_ID,
+            "writeControl": {"requiredRevisionId": "rev-2"},
+            "suggestionResponses": [{}],
+            "replies": [
+                {
+                    "insertComment": {
+                        "commentThread": {"commentId": "comment-1"}
+                    }
+                }
+            ],
+            "commentUpdateState": "ALL_SAVED",
+        }
+        state = self.root / "comment-state"
+        with patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(state)}):
+            result = execute_api(
+                self.apply_request(plan, plan_path),
+                FakeApi([document("rev-1"), after], batch),
+            )
+        self.assertEqual(result["status"], "ok", result)
+        self.assertEqual(result["summary"]["comment_count"], 1)
+        self.assertEqual(result["summary"]["suggestion_count"], 0)
+        self.assertFalse(result["summary"]["tracked_changes"])
+        self.assertEqual(result["summary"]["write_mode"], "SUGGEST")
+        self.assertEqual(
+            result["remote_receipt"]["verification"]["created_comments"],
+            [{"action_index": 0, "comment_id": "comment-1"}],
+        )
+
+    def test_person_mention_is_inserted_as_a_native_suggestion(self) -> None:
+        write_private_json(
+            self.edit_spec,
+            {
+                "schema": "google-docs-edit-spec/v1",
+                "edits": [
+                    {
+                        "person_mention": {
+                            "email": "cara@example.com",
+                            "name": "Cara",
+                            "after": "Hello ",
+                        }
+                    }
+                ],
+            },
+        )
+        plan, plan_path = self.plan()
+        self.assertEqual(
+            plan["requests"],
+            [
+                {
+                    "insertPerson": {
+                        "personProperties": {
+                            "email": "cara@example.com",
+                            "name": "Cara",
+                        },
+                        "location": {"index": 7, "tabId": "tab-1"},
+                    }
+                }
+            ],
+        )
+        after = document(
+            "rev-2",
+            elements=[
+                text_element("Hello ", 1),
+                person_element(
+                    "cara@example.com", "Cara", 7, inserted=["suggestion-mention"]
+                ),
+                text_element("old world\n", 8),
+            ],
+            suggestions=[{"suggestionId": "suggestion-mention", "status": "OPEN"}],
+        )
+        batch = {
+            "documentId": DOCUMENT_ID,
+            "writeControl": {"requiredRevisionId": "rev-2"},
+            "suggestionResponses": [
+                {"createdSuggestionIds": ["suggestion-mention"]}
+            ],
+            "commentUpdateState": "ALL_SAVED",
+        }
+        state = self.root / "mention-state"
+        with patch.dict(os.environ, {"LLM_WIKI_GOOGLE_DOCS_STATE_DIR": str(state)}):
+            result = execute_api(
+                self.apply_request(plan, plan_path),
+                FakeApi([document("rev-1"), after], batch),
+            )
+        self.assertEqual(result["status"], "ok", result)
+        self.assertEqual(result["summary"]["person_mention_count"], 1)
+        self.assertEqual(result["summary"]["suggestion_count"], 1)
+        self.assertTrue(result["summary"]["tracked_changes"])
+
+    def test_comment_and_person_mention_require_valid_emails(self) -> None:
+        for name, edit in (
+            (
+                "comment",
+                {
+                    "comment": {
+                        "quote": "old",
+                        "content": "Please review.",
+                        "assignee_email": "not-an-email",
+                    }
+                },
+            ),
+            (
+                "mention",
+                {
+                    "person_mention": {
+                        "email": "not-an-email",
+                        "after": "Hello ",
+                    }
+                },
+            ),
+        ):
+            write_private_json(
+                self.edit_spec,
+                {"schema": "google-docs-edit-spec/v1", "edits": [edit]},
+            )
+            request = self.request(
+                "api-plan",
+                f"invalid-{name}",
+                {
+                    "expected_document_url": DOCUMENT_URL,
+                    "edit_spec": str(self.edit_spec),
+                },
+            )
+            result = execute_api(request, FakeApi([document("rev-1")]))
+            self.assertEqual(result["status"], "error")
+            self.assertIn("valid email address", result["errors"][0])
+
     def test_partial_comment_failure_is_not_retried_or_auto_receipted(self) -> None:
         plan, plan_path = self.plan()
         ambiguous_batch = {
@@ -419,7 +633,7 @@ class ApiOperationsTests(unittest.TestCase):
         self.assertEqual(failed["status"], "error")
         self.assertIn("ambiguous", failed["errors"][0])
         self.assertEqual(recovered["status"], "error", recovered)
-        self.assertIn("no returned suggestion IDs", recovered["errors"][0])
+        self.assertIn("no complete returned effect IDs", recovered["errors"][0])
         self.assertEqual(len(apply_api.batch_calls), 1)
 
     def test_readback_failure_can_recover_with_returned_suggestion_ids(self) -> None:
@@ -541,7 +755,7 @@ class ApiOperationsTests(unittest.TestCase):
             "with log.open('a') as handle: handle.write(operation+'\\n')\n"
             "if operation=='api-plan':\n"
             "  spec=json.loads(Path(value['arguments']['edit_spec']).read_text())\n"
-            "  plan={'schema':'google-docs-api-suggestion-plan/v3',"
+            "  plan={'schema':'google-docs-api-change-plan/v1',"
             "'write_transport':'google-docs-api-suggest-picker-oauth-v1',"
             "'api_resource':'google-docs-api:authorized-files',"
             "'revision_id':'revision-1','edits':spec['edits']}\n"
@@ -567,7 +781,7 @@ class ApiOperationsTests(unittest.TestCase):
         completed = subprocess.run(
             [
                 sys.executable,
-                str(root / "scripts" / "run_api_suggestion_workflow.py"),
+                str(root / "scripts" / "run_api_change_workflow.py"),
                 "--llm-wiki",
                 str(fake_llm_wiki),
                 "--url",
